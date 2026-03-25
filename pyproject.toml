@@ -1,0 +1,61 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pintrs"
+dynamic = ["version"]
+description = "Fast Rust-based Python extension for physical unit manipulation"
+requires-python = ">=3.12"
+authors = [{ name = "Thomas Nowak", email = "thomas@thomasnowak.net" }]
+license = "Apache-2.0"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Typing :: Typed",
+]
+keywords = ["units", "physics", "quantities", "conversion", "pint"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "pintrs._core"
+python-source = "python"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "A", "SIM", "TCH",
+    "RUF", "S", "C4", "PT", "RET", "ARG", "PTH", "ERA", "PL", "PERF",
+]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["PLR2004", "PLC0415", "PT011", "S301", "E402", "TC002", "RUF012"]
+"python/pintrs/__init__.pyi" = ["N802", "E501"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_any_generics = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q --strict-markers --strict-config"
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
