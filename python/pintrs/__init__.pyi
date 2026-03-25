@@ -32,7 +32,11 @@ from pintrs._core import (
 from pintrs._core import (
     UnitRegistry as UnitRegistry,
 )
+from pintrs.context import Context as Context
+from pintrs.group import Group as Group
+from pintrs.logarithmic import LogarithmicQuantity as LogarithmicQuantity
 from pintrs.numpy_support import ArrayQuantity as ArrayQuantity
+from pintrs.system import System as System
 
 __version__: str
 __all__: list[str]
@@ -78,31 +82,3 @@ class Measurement:
     def __sub__(self, other: Measurement) -> Measurement: ...
     def __mul__(self, other: Measurement | float) -> Measurement: ...
     def __truediv__(self, other: Measurement | float) -> Measurement: ...
-
-class Context:
-    name: str
-    def __init__(self, name: str = "", **kwargs: Any) -> None: ...
-    def add_transformation(
-        self,
-        src: str,
-        dst: str,
-        func: Callable[..., Any],
-    ) -> None: ...
-    @staticmethod
-    def from_lines(
-        lines: list[str],
-        to_base_func: Any = None,
-    ) -> Context: ...
-
-class Group:
-    name: str
-    def __init__(self, name: str = "") -> None: ...
-    def add_units(self, *units: str) -> None: ...
-    @property
-    def members(self) -> frozenset[str]: ...
-
-class System:
-    name: str
-    def __init__(self, name: str = "") -> None: ...
-    @property
-    def base_units(self) -> dict[str, str]: ...

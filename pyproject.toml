@@ -25,6 +25,9 @@ keywords = ["units", "physics", "quantities", "conversion", "pint"]
 
 [project.optional-dependencies]
 numpy = ["numpy>=1.24"]
+babel = ["Babel>=2.12"]
+pandas = ["pandas>=2.0", "numpy>=1.24"]
+all = ["numpy>=1.24", "Babel>=2.12", "pandas>=2.0"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
@@ -43,8 +46,9 @@ select = [
 ignore = ["S101"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*.py" = ["PLR2004", "PLC0415", "PT011", "S301", "E402", "TC002", "RUF012"]
+"tests/*.py" = ["PLR2004", "PLC0415", "PT011", "S301", "E402", "TC002", "RUF012", "N802", "ARG005"]
 "python/pintrs/__init__.pyi" = ["N802", "E501"]
+"python/pintrs/pandas_support.py" = ["RUF012"]
 
 [tool.mypy]
 strict = true
@@ -63,3 +67,5 @@ addopts = "-ra -q --strict-markers --strict-config"
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"

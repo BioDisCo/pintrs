@@ -4,6 +4,8 @@ Provides ArrayQuantity that wraps numpy arrays with units, implementing
 __array_ufunc__ for transparent numpy integration.
 """
 
+# pyright: reportPrivateUsage=false, reportUnnecessaryIsInstance=false, reportUnknownArgumentType=false
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -21,11 +23,11 @@ if TYPE_CHECKING:
 try:
     import numpy as np
 
-    HAS_NUMPY = True
+    has_numpy = True
 except ImportError:
-    HAS_NUMPY = False
+    has_numpy = False
 
-if HAS_NUMPY:
+if has_numpy:
     from pintrs._core import Quantity as ScalarQuantity
     from pintrs._core import UnitRegistry as _UnitRegistry
 
@@ -56,6 +58,10 @@ if HAS_NUMPY:
         @property
         def units(self) -> Unit:
             return self._unit_obj
+
+        @property
+        def units_str(self) -> str:
+            return self._units_str
 
         @property
         def u(self) -> Unit:
@@ -101,7 +107,7 @@ if HAS_NUMPY:
         @property
         def real(self) -> ArrayQuantity:
             return ArrayQuantity(
-                self._magnitude.real,
+                np.real(self._magnitude),
                 self._units_str,
                 self._registry,
             )
@@ -109,7 +115,7 @@ if HAS_NUMPY:
         @property
         def imag(self) -> ArrayQuantity:
             return ArrayQuantity(
-                self._magnitude.imag,
+                np.imag(self._magnitude),
                 self._units_str,
                 self._registry,
             )
@@ -420,18 +426,25 @@ if HAS_NUMPY:
                 self._registry,
             )
 
-        def __eq__(self, other: object) -> Any:
+        def __eq__(self, other: object) -> bool:
             if isinstance(other, ArrayQuantity):
                 if other._units_str != self._units_str:
                     factor = self._registry._get_conversion_factor(
                         other._units_str,
                         self._units_str,
                     )
-                    return self._magnitude == other._magnitude * factor
-                return self._magnitude == other._magnitude
+                    return bool(
+                        np.array_equal(self._magnitude, other._magnitude * factor),
+                    )
+                return bool(np.array_equal(self._magnitude, other._magnitude))
             if isinstance(other, ScalarQuantity):
-                return self._magnitude == other.magnitude
-            return self._magnitude == other
+                return bool(np.array_equal(self._magnitude, other.magnitude))
+            if isinstance(other, np.ndarray | list | tuple | int | float | complex):
+                return bool(np.array_equal(self._magnitude, other))
+            return False
+
+        def __ne__(self, other: object) -> bool:
+            return not self.__eq__(other)
 
         def __lt__(
             self,
@@ -572,7 +585,30 @@ if HAS_NUMPY:
 
             if isinstance(result, np.ndarray):
                 return ArrayQuantity(result, out_units, self._registry)
+            if np.isscalar(result):
+                magnitude = result.item() if isinstance(result, np.generic) else result
+                if isinstance(magnitude, int | float):
+                    return self._registry.Quantity(float(magnitude), out_units)
+                if isinstance(magnitude, str):
+                    return self._registry.Quantity(magnitude, out_units)
             return result
+
+        def __array_function__(
+            self,
+            func: Any,
+            types: tuple[type[Any], ...],
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+        ) -> Any:
+            if not all(issubclass(t, ArrayQuantity) for t in types):
+                return NotImplemented
+            if func is np.sum:
+                result = np.sum(self._magnitude, **kwargs)
+                return self._registry.Quantity(float(result), self._units_str)
+            if func is np.mean:
+                result = np.mean(self._magnitude, **kwargs)
+                return self._registry.Quantity(float(result), self._units_str)
+            return NotImplemented
 
     ArrayQuantity._COMPARISON_UFUNCS = frozenset(
         {

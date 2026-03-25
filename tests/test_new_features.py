@@ -183,8 +183,8 @@ class TestGroupStub:
 
 class TestSystemStub:
     def test_create(self) -> None:
-        s = System("mks")
-        assert s.name == "mks"
+        s = System("test_new_features_sys")
+        assert s.name == "test_new_features_sys"
         assert isinstance(s.base_units, dict)
 
 

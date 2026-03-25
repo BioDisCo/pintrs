@@ -10,6 +10,15 @@ pintrs reimplements pint's core unit registry and quantity system in Rust via [P
 pip install pintrs
 ```
 
+Optional integrations:
+
+```bash
+pip install "pintrs[numpy]"
+pip install "pintrs[pandas]"
+pip install "pintrs[babel]"
+pip install "pintrs[all]"
+```
+
 ## Quick start
 
 ```python
@@ -33,19 +42,19 @@ print(ureg.speed_of_light)
 
 ## Performance
 
-pintrs is **10-90x faster** than pint on common operations. Benchmarks on Python 3.13 (lower is better):
+pintrs is typically **7-100x faster** than pint on common operations. Benchmarks below were measured on this branch with Python 3.13.5 (lower is better):
 
 | Operation | pintrs | pint | Speedup |
 |---|--:|--:|--:|
-| Quantity creation | 0.35 us | 3.64 us | **10x** |
-| Parse string (`"9.81 m/s**2"`) | 0.74 us | 70.61 us | **96x** |
-| Conversion (km -> m) | 1.19 us | 8.08 us | **7x** |
-| Conversion (km/h -> m/s) | 1.68 us | 14.11 us | **8x** |
-| Addition (compatible units) | 0.94 us | 12.66 us | **13x** |
-| Multiply by scalar | 0.13 us | 5.59 us | **41x** |
-| Multiply quantities | 0.17 us | 5.38 us | **31x** |
-| Parse units (`"kg * m / s ** 2"`) | 0.95 us | 23.66 us | **25x** |
-| String formatting | 0.29 us | 8.58 us | **29x** |
+| Quantity creation | 0.35 us | 3.65 us | **10x** |
+| Parse string (`"9.81 m/s**2"`) | 0.67 us | 70.12 us | **104x** |
+| Conversion (km -> m) | 1.18 us | 7.84 us | **7x** |
+| Conversion (km/h -> m/s) | 1.75 us | 13.80 us | **8x** |
+| Addition (compatible units) | 0.88 us | 12.01 us | **14x** |
+| Multiply by scalar | 0.13 us | 5.88 us | **46x** |
+| Multiply quantities | 0.16 us | 5.44 us | **33x** |
+| Parse units (`"kg * m / s ** 2"`) | 0.88 us | 23.66 us | **27x** |
+| String formatting | 0.29 us | 8.41 us | **29x** |
 
 Run `python examples/benchmark.py` to reproduce (install `pint` for comparison).
 
@@ -55,7 +64,7 @@ Run `python examples/benchmark.py` to reproduce (install `pint` for comparison).
 - **NumPy support** via `ArrayQuantity` with full ufunc integration
 - **Type-safe** with full `.pyi` stubs for mypy and pyright in strict mode
 - **Measurement support** for quantities with uncertainty propagation
-- **Compatibility stubs** for `Context`, `Group`, `System` so existing code doesn't break
+- **Context**, **Group**, and **System** support for context-based conversions, unit collections, and coherent unit systems
 
 ## NumPy integration
 
@@ -125,9 +134,12 @@ pintrs targets API compatibility with pint's most-used features:
 - Serialization via `__reduce__` (pickle) and `to_tuple`/`from_tuple`
 - `wraps` and `check` decorators
 - `Measurement` with uncertainty propagation
-- Context/Group/System stubs (API-compatible, no-op)
-
-**Not yet implemented:** full context-based conversions (spectroscopy, etc.), Babel/locale formatting, logarithmic units, pandas ExtensionArray integration.
+- Context-based conversions (spectroscopy, Boltzmann, chemistry)
+- Group (named unit collections: imperial, metric, cgs, US_customary)
+- System (coherent unit sets: mks/SI, cgs, imperial, Gaussian, atomic)
+- Babel/locale formatting (`format_babel`)
+- Logarithmic units (`LogarithmicQuantity` for dB/dBm/dBW/Np/Bel)
+- Pandas `ExtensionArray` integration (`PintArray`/`PintDtype`)
 
 ## Development
 
@@ -136,7 +148,8 @@ pintrs targets API compatibility with pint's most-used features:
 maturin develop --release
 
 # Lint and format
-ruff check --fix . && ruff format .
+ruff check --fix python/ tests/
+ruff format python/ tests/
 
 # Type check
 mypy python/pintrs/
