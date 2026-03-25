@@ -17,18 +17,50 @@ type SharedRegistry = Arc<Mutex<RustRegistry>>;
 
 // --- Custom exception types ---
 
-pyo3::create_exception!(_core, PintError_Py, pyo3::exceptions::PyValueError, "Base pint error.");
-pyo3::create_exception!(_core, DimensionalityError, PintError_Py, "Raised when converting between incompatible dimensions.");
-pyo3::create_exception!(_core, UndefinedUnitError, PintError_Py, "Raised when a unit is not found in the registry.");
-pyo3::create_exception!(_core, OffsetUnitCalculusError, PintError_Py, "Raised on ambiguous operations with offset units.");
-pyo3::create_exception!(_core, DefinitionSyntaxError, PintError_Py, "Raised on malformed unit definitions.");
-pyo3::create_exception!(_core, RedefinitionError, PintError_Py, "Raised when redefining an existing unit.");
+pyo3::create_exception!(
+    _core,
+    PintError_Py,
+    pyo3::exceptions::PyValueError,
+    "Base pint error."
+);
+pyo3::create_exception!(
+    _core,
+    DimensionalityError,
+    PintError_Py,
+    "Raised when converting between incompatible dimensions."
+);
+pyo3::create_exception!(
+    _core,
+    UndefinedUnitError,
+    PintError_Py,
+    "Raised when a unit is not found in the registry."
+);
+pyo3::create_exception!(
+    _core,
+    OffsetUnitCalculusError,
+    PintError_Py,
+    "Raised on ambiguous operations with offset units."
+);
+pyo3::create_exception!(
+    _core,
+    DefinitionSyntaxError,
+    PintError_Py,
+    "Raised on malformed unit definitions."
+);
+pyo3::create_exception!(
+    _core,
+    RedefinitionError,
+    PintError_Py,
+    "Raised when redefining an existing unit."
+);
 
 fn to_py_err(e: PintError) -> PyErr {
     match e {
         PintError::DimensionalityError { .. } => DimensionalityError::new_err(e.to_string()),
         PintError::UndefinedUnitError { .. } => UndefinedUnitError::new_err(e.to_string()),
-        PintError::OffsetUnitCalculusError { .. } => OffsetUnitCalculusError::new_err(e.to_string()),
+        PintError::OffsetUnitCalculusError { .. } => {
+            OffsetUnitCalculusError::new_err(e.to_string())
+        }
         PintError::DefinitionSyntaxError { .. } => DefinitionSyntaxError::new_err(e.to_string()),
         PintError::RedefinitionError { .. } => RedefinitionError::new_err(e.to_string()),
     }
@@ -60,8 +92,14 @@ impl PyUnitRegistry {
                 Some(u) => {
                     let reg = self.inner.lock().unwrap();
                     let dst = reg.parse_unit_expr(u).map_err(to_py_err)?;
-                    let new_mag = reg.convert(other_q.magnitude, &other_q.units, &dst).map_err(to_py_err)?;
-                    Ok(PyQuantity { magnitude: new_mag, units: dst, registry: Arc::clone(&self.inner) })
+                    let new_mag = reg
+                        .convert(other_q.magnitude, &other_q.units, &dst)
+                        .map_err(to_py_err)?;
+                    Ok(PyQuantity {
+                        magnitude: new_mag,
+                        units: dst,
+                        registry: Arc::clone(&self.inner),
+                    })
                 }
                 None => Ok(PyQuantity {
                     magnitude: other_q.magnitude,
@@ -74,7 +112,9 @@ impl PyUnitRegistry {
         // Quantity(string) -> parse
         if let Ok(s) = value.extract::<String>() {
             if units.is_some() {
-                return Err(PyValueError::new_err("Cannot specify units when value is a string"));
+                return Err(PyValueError::new_err(
+                    "Cannot specify units when value is a string",
+                ));
             }
             return self.parse_expression(&s);
         }
@@ -84,14 +124,21 @@ impl PyUnitRegistry {
         let units_str = units.unwrap_or("dimensionless");
         let reg = self.inner.lock().unwrap();
         let uc = reg.parse_unit_expr(units_str).map_err(to_py_err)?;
-        Ok(PyQuantity { magnitude: mag, units: uc, registry: Arc::clone(&self.inner) })
+        Ok(PyQuantity {
+            magnitude: mag,
+            units: uc,
+            registry: Arc::clone(&self.inner),
+        })
     }
 
     #[pyo3(name = "Unit")]
     fn unit(&self, units: &str) -> PyResult<PyUnit> {
         let reg = self.inner.lock().unwrap();
         let uc = reg.parse_unit_expr(units).map_err(to_py_err)?;
-        Ok(PyUnit { units: uc, registry: Arc::clone(&self.inner) })
+        Ok(PyUnit {
+            units: uc,
+            registry: Arc::clone(&self.inner),
+        })
     }
 
     #[pyo3(name = "parse_expression")]
@@ -101,7 +148,8 @@ impl PyUnitRegistry {
             return Err(PyValueError::new_err("Cannot parse empty expression"));
         }
         let (mag, unit_str) = parse_quantity_string(expr);
-        let magnitude: f64 = mag.parse()
+        let magnitude: f64 = mag
+            .parse()
             .map_err(|_| PyValueError::new_err(format!("Cannot parse magnitude: '{}'", mag)))?;
         let reg = self.inner.lock().unwrap();
         let units = if unit_str.is_empty() {
@@ -109,7 +157,11 @@ impl PyUnitRegistry {
         } else {
             reg.parse_unit_expr(unit_str).map_err(to_py_err)?
         };
-        Ok(PyQuantity { magnitude, units, registry: Arc::clone(&self.inner) })
+        Ok(PyQuantity {
+            magnitude,
+            units,
+            registry: Arc::clone(&self.inner),
+        })
     }
 
     #[pyo3(name = "parse_units")]
@@ -156,7 +208,8 @@ impl PyUnitRegistry {
         let reg = self.inner.lock().unwrap();
         let src_uc = reg.parse_unit_expr(src).map_err(to_py_err)?;
         let dst_uc = reg.parse_unit_expr(dst).map_err(to_py_err)?;
-        reg.get_conversion_factor(&src_uc, &dst_uc).map_err(to_py_err)
+        reg.get_conversion_factor(&src_uc, &dst_uc)
+            .map_err(to_py_err)
     }
 
     /// Internal: get root units representation
@@ -193,7 +246,13 @@ impl PyUnitRegistry {
         let reg = self.inner.lock().unwrap();
         let uc = reg.parse_unit_expr(unit).map_err(to_py_err)?;
         let (factor, root) = reg.get_root_units(&uc).map_err(to_py_err)?;
-        Ok((factor, PyUnit { units: root, registry: Arc::clone(&self.inner) }))
+        Ok((
+            factor,
+            PyUnit {
+                units: root,
+                registry: Arc::clone(&self.inner),
+            },
+        ))
     }
 
     /// Get root units (alias for get_base_units).
@@ -288,17 +347,23 @@ impl PyUnitRegistry {
     fn __getattr__(&self, name: &str) -> PyResult<PyQuantity> {
         if name.starts_with('_') {
             return Err(pyo3::exceptions::PyAttributeError::new_err(format!(
-                "'UnitRegistry' object has no attribute '{}'", name
+                "'UnitRegistry' object has no attribute '{}'",
+                name
             )));
         }
         let reg = self.inner.lock().unwrap();
         if !reg.is_known_unit(name) {
             return Err(pyo3::exceptions::PyAttributeError::new_err(format!(
-                "'{}' is not defined in the unit registry", name
+                "'{}' is not defined in the unit registry",
+                name
             )));
         }
         let uc = reg.parse_unit_expr(name).map_err(to_py_err)?;
-        Ok(PyQuantity { magnitude: 1.0, units: uc, registry: Arc::clone(&self.inner) })
+        Ok(PyQuantity {
+            magnitude: 1.0,
+            units: uc,
+            registry: Arc::clone(&self.inner),
+        })
     }
 }
 
@@ -327,10 +392,16 @@ impl PyQuantity {
                     let (new_mag, dst) = {
                         let r = shared.lock().unwrap();
                         let dst = r.parse_unit_expr(u).map_err(to_py_err)?;
-                        let new_mag = r.convert(other_q.magnitude, &other_q.units, &dst).map_err(to_py_err)?;
+                        let new_mag = r
+                            .convert(other_q.magnitude, &other_q.units, &dst)
+                            .map_err(to_py_err)?;
                         (new_mag, dst)
                     };
-                    Ok(Self { magnitude: new_mag, units: dst, registry: shared })
+                    Ok(Self {
+                        magnitude: new_mag,
+                        units: dst,
+                        registry: shared,
+                    })
                 }
                 None => Ok(Self {
                     magnitude: other_q.magnitude,
@@ -343,17 +414,23 @@ impl PyQuantity {
         // Quantity(string)
         if let Ok(s) = value.extract::<String>() {
             if units.is_some() {
-                return Err(PyValueError::new_err("Cannot specify units when value is a string"));
+                return Err(PyValueError::new_err(
+                    "Cannot specify units when value is a string",
+                ));
             }
             let (mag, unit_str) = parse_quantity_string(&s);
-            let magnitude: f64 = mag.parse().map_err(|_| {
-                PyValueError::new_err(format!("Cannot parse magnitude: '{}'", mag))
-            })?;
+            let magnitude: f64 = mag
+                .parse()
+                .map_err(|_| PyValueError::new_err(format!("Cannot parse magnitude: '{}'", mag)))?;
             let uc = {
                 let r = shared.lock().unwrap();
                 r.parse_unit_expr(unit_str).map_err(to_py_err)?
             };
-            return Ok(Self { magnitude, units: uc, registry: shared });
+            return Ok(Self {
+                magnitude,
+                units: uc,
+                registry: shared,
+            });
         }
 
         // Quantity(number, units)
@@ -363,23 +440,37 @@ impl PyQuantity {
             let r = shared.lock().unwrap();
             r.parse_unit_expr(units_str).map_err(to_py_err)?
         };
-        Ok(Self { magnitude: mag, units: uc, registry: shared })
+        Ok(Self {
+            magnitude: mag,
+            units: uc,
+            registry: shared,
+        })
     }
 
     #[getter]
-    fn magnitude(&self) -> f64 { self.magnitude }
+    fn magnitude(&self) -> f64 {
+        self.magnitude
+    }
 
     #[getter]
-    fn m(&self) -> f64 { self.magnitude }
+    fn m(&self) -> f64 {
+        self.magnitude
+    }
 
     #[getter]
     fn units(&self) -> PyUnit {
-        PyUnit { units: self.units.clone(), registry: Arc::clone(&self.registry) }
+        PyUnit {
+            units: self.units.clone(),
+            registry: Arc::clone(&self.registry),
+        }
     }
 
     #[getter]
     fn u(&self) -> PyUnit {
-        PyUnit { units: self.units.clone(), registry: Arc::clone(&self.registry) }
+        PyUnit {
+            units: self.units.clone(),
+            registry: Arc::clone(&self.registry),
+        }
     }
 
     fn m_as(&self, units: &str) -> PyResult<f64> {
@@ -389,14 +480,22 @@ impl PyQuantity {
     fn to(&self, units: &str) -> PyResult<PyQuantity> {
         let reg = self.registry.lock().unwrap();
         let dst = reg.parse_unit_expr(units).map_err(to_py_err)?;
-        let new_mag = reg.convert(self.magnitude, &self.units, &dst).map_err(to_py_err)?;
-        Ok(PyQuantity { magnitude: new_mag, units: dst, registry: Arc::clone(&self.registry) })
+        let new_mag = reg
+            .convert(self.magnitude, &self.units, &dst)
+            .map_err(to_py_err)?;
+        Ok(PyQuantity {
+            magnitude: new_mag,
+            units: dst,
+            registry: Arc::clone(&self.registry),
+        })
     }
 
     fn ito(&mut self, units: &str) -> PyResult<()> {
         let reg = self.registry.lock().unwrap();
         let dst = reg.parse_unit_expr(units).map_err(to_py_err)?;
-        let new_mag = reg.convert(self.magnitude, &self.units, &dst).map_err(to_py_err)?;
+        let new_mag = reg
+            .convert(self.magnitude, &self.units, &dst)
+            .map_err(to_py_err)?;
         self.magnitude = new_mag;
         self.units = dst;
         Ok(())
@@ -436,7 +535,9 @@ impl PyQuantity {
         // If a target unit is given, convert to that first, then compact
         let (mag, units) = if let Some(u) = unit {
             let dst = reg.parse_unit_expr(u).map_err(to_py_err)?;
-            let m = reg.convert(self.magnitude, &self.units, &dst).map_err(to_py_err)?;
+            let m = reg
+                .convert(self.magnitude, &self.units, &dst)
+                .map_err(to_py_err)?;
             (m, dst)
         } else {
             (self.magnitude, self.units.clone())
@@ -444,27 +545,57 @@ impl PyQuantity {
 
         // Only compact single-unit quantities
         if units.len() != 1 {
-            return Ok(PyQuantity { magnitude: mag, units, registry: Arc::clone(&self.registry) });
+            return Ok(PyQuantity {
+                magnitude: mag,
+                units,
+                registry: Arc::clone(&self.registry),
+            });
         }
 
         let (unit_name, &exp) = units.iter().next().unwrap();
         if (exp - 1.0).abs() > f64::EPSILON {
-            return Ok(PyQuantity { magnitude: mag, units, registry: Arc::clone(&self.registry) });
+            return Ok(PyQuantity {
+                magnitude: mag,
+                units,
+                registry: Arc::clone(&self.registry),
+            });
         }
 
         // SI decimal prefixes only (exclude binary kibi/mebi/etc. and oddities like semi/sesqui)
         static SI_PREFIXES: &[(&str, f64)] = &[
-            ("quecto", 1e-30), ("ronto", 1e-27), ("yocto", 1e-24), ("zepto", 1e-21),
-            ("atto", 1e-18), ("femto", 1e-15), ("pico", 1e-12), ("nano", 1e-9),
-            ("micro", 1e-6), ("milli", 1e-3), ("centi", 1e-2), ("deci", 1e-1),
-            ("deca", 1e1), ("hecto", 1e2), ("kilo", 1e3), ("mega", 1e6),
-            ("giga", 1e9), ("tera", 1e12), ("peta", 1e15), ("exa", 1e18),
-            ("zetta", 1e21), ("yotta", 1e24), ("ronna", 1e27), ("quetta", 1e30),
+            ("quecto", 1e-30),
+            ("ronto", 1e-27),
+            ("yocto", 1e-24),
+            ("zepto", 1e-21),
+            ("atto", 1e-18),
+            ("femto", 1e-15),
+            ("pico", 1e-12),
+            ("nano", 1e-9),
+            ("micro", 1e-6),
+            ("milli", 1e-3),
+            ("centi", 1e-2),
+            ("deci", 1e-1),
+            ("deca", 1e1),
+            ("hecto", 1e2),
+            ("kilo", 1e3),
+            ("mega", 1e6),
+            ("giga", 1e9),
+            ("tera", 1e12),
+            ("peta", 1e15),
+            ("exa", 1e18),
+            ("zetta", 1e21),
+            ("yotta", 1e24),
+            ("ronna", 1e27),
+            ("quetta", 1e30),
         ];
 
         let abs_mag = mag.abs();
         if abs_mag == 0.0 {
-            return Ok(PyQuantity { magnitude: mag, units, registry: Arc::clone(&self.registry) });
+            return Ok(PyQuantity {
+                magnitude: mag,
+                units,
+                registry: Arc::clone(&self.registry),
+            });
         }
 
         let mut best_prefix = "";
@@ -489,13 +620,23 @@ impl PyQuantity {
 
         let best_factor = match best_factor {
             Some(f) => f,
-            None => return Ok(PyQuantity { magnitude: mag, units, registry: Arc::clone(&self.registry) }),
+            None => {
+                return Ok(PyQuantity {
+                    magnitude: mag,
+                    units,
+                    registry: Arc::clone(&self.registry),
+                })
+            }
         };
 
         let new_unit_name = format!("{}{}", best_prefix, unit_name);
         let new_mag = mag / best_factor;
         let new_units = UnitsContainer::from_single(new_unit_name, 1.0);
-        Ok(PyQuantity { magnitude: new_mag, units: new_units, registry: Arc::clone(&self.registry) })
+        Ok(PyQuantity {
+            magnitude: new_mag,
+            units: new_units,
+            registry: Arc::clone(&self.registry),
+        })
     }
 
     /// Reduce compound units to their simplest form.
@@ -528,8 +669,14 @@ impl PyQuantity {
             let pref_uc = reg.parse_unit_expr(pref).map_err(to_py_err)?;
             let pref_dim = reg.get_dimensionality(&pref_uc).map_err(to_py_err)?;
             if pref_dim == self_dim {
-                let new_mag = reg.convert(self.magnitude, &self.units, &pref_uc).map_err(to_py_err)?;
-                return Ok(PyQuantity { magnitude: new_mag, units: pref_uc, registry: Arc::clone(&self.registry) });
+                let new_mag = reg
+                    .convert(self.magnitude, &self.units, &pref_uc)
+                    .map_err(to_py_err)?;
+                return Ok(PyQuantity {
+                    magnitude: new_mag,
+                    units: pref_uc,
+                    registry: Arc::clone(&self.registry),
+                });
             }
         }
 
@@ -548,7 +695,8 @@ impl PyQuantity {
             magnitude: self.magnitude,
             units: self.units.clone(),
             registry: Arc::clone(&self.registry),
-        }.to_preferred(preferred_units)?;
+        }
+        .to_preferred(preferred_units)?;
         self.magnitude = result.magnitude;
         self.units = result.units;
         Ok(())
@@ -562,9 +710,9 @@ impl PyQuantity {
 
         for (unit_name, &exp) in self.units.iter() {
             // Try to find the base (unprefixed) unit
-            let (uf, root) = reg.get_root_units(
-                &UnitsContainer::from_single(unit_name.clone(), 1.0)
-            ).map_err(to_py_err)?;
+            let (uf, root) = reg
+                .get_root_units(&UnitsContainer::from_single(unit_name.clone(), 1.0))
+                .map_err(to_py_err)?;
             factor *= uf.powf(exp);
             new_units = &new_units * &root.pow(exp);
         }
@@ -581,7 +729,8 @@ impl PyQuantity {
             magnitude: self.magnitude,
             units: self.units.clone(),
             registry: Arc::clone(&self.registry),
-        }.to_unprefixed()?;
+        }
+        .to_unprefixed()?;
         self.magnitude = result.magnitude;
         self.units = result.units;
         Ok(())
@@ -589,9 +738,7 @@ impl PyQuantity {
 
     /// Return (magnitude, units_tuple) for serialization.
     fn to_tuple(&self) -> (f64, Vec<(String, f64)>) {
-        let items: Vec<(String, f64)> = self.units.iter()
-            .map(|(k, &v)| (k.clone(), v))
-            .collect();
+        let items: Vec<(String, f64)> = self.units.iter().map(|(k, &v)| (k.clone(), v)).collect();
         (self.magnitude, items)
     }
 
@@ -633,10 +780,12 @@ impl PyQuantity {
     fn to_timedelta(&self) -> PyResult<PyObject> {
         let reg = self.registry.lock().unwrap();
         let seconds_uc = reg.parse_unit_expr("second").map_err(to_py_err)?;
-        let seconds = reg.convert(self.magnitude, &self.units, &seconds_uc).map_err(to_py_err)?;
+        let seconds = reg
+            .convert(self.magnitude, &self.units, &seconds_uc)
+            .map_err(to_py_err)?;
         Python::with_gil(|py| {
             let datetime = py.import("datetime")?;
-            let td = datetime.getattr("timedelta")?.call1((0, seconds,))?;
+            let td = datetime.getattr("timedelta")?.call1((0, seconds))?;
             Ok(td.unbind())
         })
     }
@@ -784,10 +933,13 @@ impl PyQuantity {
         let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
         if !dim.is_empty() {
             return Err(DimensionalityError::new_err(format!(
-                "Cannot convert Quantity with dimensionality {} to float", dim
+                "Cannot convert Quantity with dimensionality {} to float",
+                dim
             )));
         }
-        let factor = reg.get_conversion_factor(&self.units, &UnitsContainer::new()).map_err(to_py_err)?;
+        let factor = reg
+            .get_conversion_factor(&self.units, &UnitsContainer::new())
+            .map_err(to_py_err)?;
         Ok(self.magnitude * factor)
     }
 
@@ -800,11 +952,19 @@ impl PyQuantity {
     }
 
     fn __neg__(&self) -> PyQuantity {
-        PyQuantity { magnitude: -self.magnitude, units: self.units.clone(), registry: Arc::clone(&self.registry) }
+        PyQuantity {
+            magnitude: -self.magnitude,
+            units: self.units.clone(),
+            registry: Arc::clone(&self.registry),
+        }
     }
 
     fn __abs__(&self) -> PyQuantity {
-        PyQuantity { magnitude: self.magnitude.abs(), units: self.units.clone(), registry: Arc::clone(&self.registry) }
+        PyQuantity {
+            magnitude: self.magnitude.abs(),
+            units: self.units.clone(),
+            registry: Arc::clone(&self.registry),
+        }
     }
 
     #[pyo3(signature = (ndigits=None))]
@@ -821,7 +981,9 @@ impl PyQuantity {
     fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
         if let Ok(other_q) = other.extract::<PyQuantity>() {
             let reg = self.registry.lock().unwrap();
-            let factor = reg.get_conversion_factor(&other_q.units, &self.units).map_err(to_py_err)?;
+            let factor = reg
+                .get_conversion_factor(&other_q.units, &self.units)
+                .map_err(to_py_err)?;
             Ok(PyQuantity {
                 magnitude: self.magnitude + other_q.magnitude * factor,
                 units: self.units.clone(),
@@ -832,21 +994,29 @@ impl PyQuantity {
             let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
             if !dim.is_empty() && val != 0.0 {
                 return Err(DimensionalityError::new_err(
-                    "Cannot add dimensionless to quantity with dimensions"
+                    "Cannot add dimensionless to quantity with dimensions",
                 ));
             }
-            Ok(PyQuantity { magnitude: self.magnitude + val, units: self.units.clone(), registry: Arc::clone(&self.registry) })
+            Ok(PyQuantity {
+                magnitude: self.magnitude + val,
+                units: self.units.clone(),
+                registry: Arc::clone(&self.registry),
+            })
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for +"))
         }
     }
 
-    fn __radd__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> { self.__add__(other) }
+    fn __radd__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
+        self.__add__(other)
+    }
 
     fn __sub__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
         if let Ok(other_q) = other.extract::<PyQuantity>() {
             let reg = self.registry.lock().unwrap();
-            let factor = reg.get_conversion_factor(&other_q.units, &self.units).map_err(to_py_err)?;
+            let factor = reg
+                .get_conversion_factor(&other_q.units, &self.units)
+                .map_err(to_py_err)?;
             Ok(PyQuantity {
                 magnitude: self.magnitude - other_q.magnitude * factor,
                 units: self.units.clone(),
@@ -857,10 +1027,14 @@ impl PyQuantity {
             let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
             if !dim.is_empty() && val != 0.0 {
                 return Err(DimensionalityError::new_err(
-                    "Cannot subtract dimensionless from quantity with dimensions"
+                    "Cannot subtract dimensionless from quantity with dimensions",
                 ));
             }
-            Ok(PyQuantity { magnitude: self.magnitude - val, units: self.units.clone(), registry: Arc::clone(&self.registry) })
+            Ok(PyQuantity {
+                magnitude: self.magnitude - val,
+                units: self.units.clone(),
+                registry: Arc::clone(&self.registry),
+            })
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for -"))
         }
@@ -868,7 +1042,11 @@ impl PyQuantity {
 
     fn __rsub__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
         let result = self.__sub__(other)?;
-        Ok(PyQuantity { magnitude: -result.magnitude, units: result.units, registry: result.registry })
+        Ok(PyQuantity {
+            magnitude: -result.magnitude,
+            units: result.units,
+            registry: result.registry,
+        })
     }
 
     fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
@@ -885,17 +1063,25 @@ impl PyQuantity {
                 registry: Arc::clone(&self.registry),
             })
         } else if let Ok(val) = other.extract::<f64>() {
-            Ok(PyQuantity { magnitude: self.magnitude * val, units: self.units.clone(), registry: Arc::clone(&self.registry) })
+            Ok(PyQuantity {
+                magnitude: self.magnitude * val,
+                units: self.units.clone(),
+                registry: Arc::clone(&self.registry),
+            })
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for *"))
         }
     }
 
-    fn __rmul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> { self.__mul__(other) }
+    fn __rmul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
+        self.__mul__(other)
+    }
 
     fn __truediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
         if let Ok(other_q) = other.extract::<PyQuantity>() {
-            if other_q.magnitude == 0.0 { return Err(PyZeroDivisionError::new_err("Division by zero")); }
+            if other_q.magnitude == 0.0 {
+                return Err(PyZeroDivisionError::new_err("Division by zero"));
+            }
             Ok(PyQuantity {
                 magnitude: self.magnitude / other_q.magnitude,
                 units: &self.units / &other_q.units,
@@ -908,17 +1094,29 @@ impl PyQuantity {
                 registry: Arc::clone(&self.registry),
             })
         } else if let Ok(val) = other.extract::<f64>() {
-            if val == 0.0 { return Err(PyZeroDivisionError::new_err("Division by zero")); }
-            Ok(PyQuantity { magnitude: self.magnitude / val, units: self.units.clone(), registry: Arc::clone(&self.registry) })
+            if val == 0.0 {
+                return Err(PyZeroDivisionError::new_err("Division by zero"));
+            }
+            Ok(PyQuantity {
+                magnitude: self.magnitude / val,
+                units: self.units.clone(),
+                registry: Arc::clone(&self.registry),
+            })
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for /"))
         }
     }
 
     fn __rtruediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
-        if self.magnitude == 0.0 { return Err(PyZeroDivisionError::new_err("Division by zero")); }
+        if self.magnitude == 0.0 {
+            return Err(PyZeroDivisionError::new_err("Division by zero"));
+        }
         if let Ok(val) = other.extract::<f64>() {
-            Ok(PyQuantity { magnitude: val / self.magnitude, units: self.units.inv(), registry: Arc::clone(&self.registry) })
+            Ok(PyQuantity {
+                magnitude: val / self.magnitude,
+                units: self.units.inv(),
+                registry: Arc::clone(&self.registry),
+            })
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for /"))
         }
@@ -936,14 +1134,17 @@ impl PyQuantity {
         if let Ok(other_q) = other.extract::<PyQuantity>() {
             let reg = self.registry.lock().unwrap();
             match reg.get_conversion_factor(&other_q.units, &self.units) {
-                Ok(factor) => Ok((self.magnitude - other_q.magnitude * factor).abs() < f64::EPSILON * self.magnitude.abs().max(1.0)),
+                Ok(factor) => Ok((self.magnitude - other_q.magnitude * factor).abs()
+                    < f64::EPSILON * self.magnitude.abs().max(1.0)),
                 Err(_) => Ok(false),
             }
         } else if let Ok(val) = other.extract::<f64>() {
             let reg = self.registry.lock().unwrap();
             let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
             if dim.is_empty() {
-                let factor = reg.get_conversion_factor(&self.units, &UnitsContainer::new()).map_err(to_py_err)?;
+                let factor = reg
+                    .get_conversion_factor(&self.units, &UnitsContainer::new())
+                    .map_err(to_py_err)?;
                 Ok((self.magnitude * factor - val).abs() < f64::EPSILON * val.abs().max(1.0))
             } else {
                 Ok(false)
@@ -960,40 +1161,56 @@ impl PyQuantity {
     fn __lt__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
         if let Ok(other_q) = other.extract::<PyQuantity>() {
             let reg = self.registry.lock().unwrap();
-            let factor = reg.get_conversion_factor(&other_q.units, &self.units).map_err(to_py_err)?;
+            let factor = reg
+                .get_conversion_factor(&other_q.units, &self.units)
+                .map_err(to_py_err)?;
             Ok(self.magnitude < other_q.magnitude * factor)
         } else {
-            Err(PyTypeError::new_err("Cannot compare Quantity with non-Quantity"))
+            Err(PyTypeError::new_err(
+                "Cannot compare Quantity with non-Quantity",
+            ))
         }
     }
 
     fn __le__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
         if let Ok(other_q) = other.extract::<PyQuantity>() {
             let reg = self.registry.lock().unwrap();
-            let factor = reg.get_conversion_factor(&other_q.units, &self.units).map_err(to_py_err)?;
+            let factor = reg
+                .get_conversion_factor(&other_q.units, &self.units)
+                .map_err(to_py_err)?;
             Ok(self.magnitude <= other_q.magnitude * factor)
         } else {
-            Err(PyTypeError::new_err("Cannot compare Quantity with non-Quantity"))
+            Err(PyTypeError::new_err(
+                "Cannot compare Quantity with non-Quantity",
+            ))
         }
     }
 
     fn __gt__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
         if let Ok(other_q) = other.extract::<PyQuantity>() {
             let reg = self.registry.lock().unwrap();
-            let factor = reg.get_conversion_factor(&other_q.units, &self.units).map_err(to_py_err)?;
+            let factor = reg
+                .get_conversion_factor(&other_q.units, &self.units)
+                .map_err(to_py_err)?;
             Ok(self.magnitude > other_q.magnitude * factor)
         } else {
-            Err(PyTypeError::new_err("Cannot compare Quantity with non-Quantity"))
+            Err(PyTypeError::new_err(
+                "Cannot compare Quantity with non-Quantity",
+            ))
         }
     }
 
     fn __ge__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
         if let Ok(other_q) = other.extract::<PyQuantity>() {
             let reg = self.registry.lock().unwrap();
-            let factor = reg.get_conversion_factor(&other_q.units, &self.units).map_err(to_py_err)?;
+            let factor = reg
+                .get_conversion_factor(&other_q.units, &self.units)
+                .map_err(to_py_err)?;
             Ok(self.magnitude >= other_q.magnitude * factor)
         } else {
-            Err(PyTypeError::new_err("Cannot compare Quantity with non-Quantity"))
+            Err(PyTypeError::new_err(
+                "Cannot compare Quantity with non-Quantity",
+            ))
         }
     }
 
@@ -1050,7 +1267,10 @@ impl PyUnit {
         let reg = RustRegistry::new().map_err(to_py_err)?;
         let uc = reg.parse_unit_expr(units).map_err(to_py_err)?;
         let shared = Arc::new(Mutex::new(reg));
-        Ok(Self { units: uc, registry: shared })
+        Ok(Self {
+            units: uc,
+            registry: shared,
+        })
     }
 
     #[getter]
@@ -1110,28 +1330,47 @@ impl PyUnit {
     fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         let py = other.py();
         if let Ok(other_u) = other.extract::<PyUnit>() {
-            Ok(PyUnit { units: &self.units * &other_u.units, registry: Arc::clone(&self.registry) }
-                .into_pyobject(py)?.into_any().unbind())
+            Ok(PyUnit {
+                units: &self.units * &other_u.units,
+                registry: Arc::clone(&self.registry),
+            }
+            .into_pyobject(py)?
+            .into_any()
+            .unbind())
         } else if let Ok(val) = other.extract::<f64>() {
-            Ok(PyQuantity { magnitude: val, units: self.units.clone(), registry: Arc::clone(&self.registry) }
-                .into_pyobject(py)?.into_any().unbind())
+            Ok(PyQuantity {
+                magnitude: val,
+                units: self.units.clone(),
+                registry: Arc::clone(&self.registry),
+            }
+            .into_pyobject(py)?
+            .into_any()
+            .unbind())
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for *"))
         }
     }
 
-    fn __rmul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> { self.__mul__(other) }
+    fn __rmul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        self.__mul__(other)
+    }
 
     fn __truediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyUnit> {
         if let Ok(other_u) = other.extract::<PyUnit>() {
-            Ok(PyUnit { units: &self.units / &other_u.units, registry: Arc::clone(&self.registry) })
+            Ok(PyUnit {
+                units: &self.units / &other_u.units,
+                registry: Arc::clone(&self.registry),
+            })
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for /"))
         }
     }
 
     fn __pow__(&self, exp: f64, _modulo: Option<u32>) -> PyUnit {
-        PyUnit { units: self.units.pow(exp), registry: Arc::clone(&self.registry) }
+        PyUnit {
+            units: self.units.pow(exp),
+            registry: Arc::clone(&self.registry),
+        }
     }
 
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
@@ -1162,15 +1401,22 @@ impl PyUnit {
     fn from_(&self, value: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
         let q: PyQuantity = value.extract()?;
         let reg = self.registry.lock().unwrap();
-        let new_mag = reg.convert(q.magnitude, &q.units, &self.units).map_err(to_py_err)?;
-        Ok(PyQuantity { magnitude: new_mag, units: self.units.clone(), registry: Arc::clone(&self.registry) })
+        let new_mag = reg
+            .convert(q.magnitude, &q.units, &self.units)
+            .map_err(to_py_err)?;
+        Ok(PyQuantity {
+            magnitude: new_mag,
+            units: self.units.clone(),
+            registry: Arc::clone(&self.registry),
+        })
     }
 
     /// Get magnitude of a Quantity in this Unit.
     fn m_from(&self, value: &Bound<'_, PyAny>) -> PyResult<f64> {
         let q: PyQuantity = value.extract()?;
         let reg = self.registry.lock().unwrap();
-        reg.convert(q.magnitude, &q.units, &self.units).map_err(to_py_err)
+        reg.convert(q.magnitude, &q.units, &self.units)
+            .map_err(to_py_err)
     }
 
     /// Return set of system names this unit belongs to (stub: returns empty set).
@@ -1188,8 +1434,12 @@ impl PyUnit {
         }
     }
 
-    fn __copy__(&self) -> PyUnit { self.clone() }
-    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> PyUnit { self.clone() }
+    fn __copy__(&self) -> PyUnit {
+        self.clone()
+    }
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> PyUnit {
+        self.clone()
+    }
 }
 
 // --- helpers ---
@@ -1199,8 +1449,12 @@ fn parse_quantity_string(s: &str) -> (String, &str) {
     let mut split_pos = 0;
     let chars: Vec<char> = s.chars().collect();
 
-    while split_pos < chars.len() && chars[split_pos].is_whitespace() { split_pos += 1; }
-    if split_pos < chars.len() && (chars[split_pos] == '+' || chars[split_pos] == '-') { split_pos += 1; }
+    while split_pos < chars.len() && chars[split_pos].is_whitespace() {
+        split_pos += 1;
+    }
+    if split_pos < chars.len() && (chars[split_pos] == '+' || chars[split_pos] == '-') {
+        split_pos += 1;
+    }
 
     let mut seen_dot = false;
     let mut seen_e = false;
@@ -1214,7 +1468,9 @@ fn parse_quantity_string(s: &str) -> (String, &str) {
         } else if (c == 'e' || c == 'E') && !seen_e {
             seen_e = true;
             split_pos += 1;
-            if split_pos < chars.len() && (chars[split_pos] == '+' || chars[split_pos] == '-') { split_pos += 1; }
+            if split_pos < chars.len() && (chars[split_pos] == '+' || chars[split_pos] == '-') {
+                split_pos += 1;
+            }
         } else {
             break;
         }
@@ -1239,10 +1495,22 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Exception types
     m.add("PintError", m.py().get_type::<PintError_Py>())?;
-    m.add("DimensionalityError", m.py().get_type::<DimensionalityError>())?;
-    m.add("UndefinedUnitError", m.py().get_type::<UndefinedUnitError>())?;
-    m.add("OffsetUnitCalculusError", m.py().get_type::<OffsetUnitCalculusError>())?;
-    m.add("DefinitionSyntaxError", m.py().get_type::<DefinitionSyntaxError>())?;
+    m.add(
+        "DimensionalityError",
+        m.py().get_type::<DimensionalityError>(),
+    )?;
+    m.add(
+        "UndefinedUnitError",
+        m.py().get_type::<UndefinedUnitError>(),
+    )?;
+    m.add(
+        "OffsetUnitCalculusError",
+        m.py().get_type::<OffsetUnitCalculusError>(),
+    )?;
+    m.add(
+        "DefinitionSyntaxError",
+        m.py().get_type::<DefinitionSyntaxError>(),
+    )?;
     m.add("RedefinitionError", m.py().get_type::<RedefinitionError>())?;
 
     Ok(())

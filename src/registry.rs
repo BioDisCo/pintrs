@@ -135,7 +135,8 @@ impl UnitRegistry {
             if let Some(canonical) = reg.name_map.get(&alias_def.name).cloned() {
                 for alias in &alias_def.aliases {
                     reg.name_map.insert(alias.clone(), canonical.clone());
-                    reg.name_map.insert(format!("{}s", alias), canonical.clone());
+                    reg.name_map
+                        .insert(format!("{}s", alias), canonical.clone());
                 }
             }
         }
@@ -182,8 +183,7 @@ impl UnitRegistry {
         }
 
         // Derived unit: resolve the relation
-        let (factor, root_units, dimensionality) =
-            self.resolve_relation(&def.relation)?;
+        let (factor, root_units, dimensionality) = self.resolve_relation(&def.relation)?;
 
         let entry = UnitEntry {
             name: def.name.clone(),
@@ -233,11 +233,7 @@ impl UnitRegistry {
 
         // Special case: empty relation = dimensionless
         if relation.is_empty() || relation == "[]" {
-            return Ok((
-                1.0,
-                UnitsContainer::new(),
-                UnitsContainer::new(),
-            ));
+            return Ok((1.0, UnitsContainer::new(), UnitsContainer::new()));
         }
 
         // Tokenize the relation into numbers, unit references, and operators
@@ -377,10 +373,7 @@ impl UnitRegistry {
     }
 
     /// Resolve a single unit name (possibly prefixed) to its factor, root_units, dimensionality
-    fn resolve_unit_ref(
-        &self,
-        name: &str,
-    ) -> PintResult<(f64, UnitsContainer, UnitsContainer)> {
+    fn resolve_unit_ref(&self, name: &str) -> PintResult<(f64, UnitsContainer, UnitsContainer)> {
         // First try direct lookup
         if let Some(canonical) = self.name_map.get(name) {
             if let Some(entry) = self.units.get(canonical) {
@@ -484,10 +477,7 @@ impl UnitRegistry {
     }
 
     /// Evaluate unit expression tokens into a UnitsContainer
-    fn eval_unit_expr_tokens(
-        &self,
-        tokens: &[RelToken],
-    ) -> PintResult<UnitsContainer> {
+    fn eval_unit_expr_tokens(&self, tokens: &[RelToken]) -> PintResult<UnitsContainer> {
         let mut result = UnitsContainer::new();
         let mut pending_op = RelOp::Mul;
         let mut pending_factor = 1.0_f64;
@@ -583,10 +573,7 @@ impl UnitRegistry {
     }
 
     /// Get the dimensionality of a units container
-    pub fn get_dimensionality(
-        &self,
-        units: &UnitsContainer,
-    ) -> PintResult<UnitsContainer> {
+    pub fn get_dimensionality(&self, units: &UnitsContainer) -> PintResult<UnitsContainer> {
         let mut result = UnitsContainer::new();
         for (unit_name, &exp) in units.iter() {
             let dim = self.get_unit_dimensionality(unit_name)?;
@@ -595,10 +582,7 @@ impl UnitRegistry {
         Ok(result)
     }
 
-    fn get_unit_dimensionality(
-        &self,
-        name: &str,
-    ) -> PintResult<UnitsContainer> {
+    fn get_unit_dimensionality(&self, name: &str) -> PintResult<UnitsContainer> {
         // Direct lookup
         if let Some(canonical) = self.name_map.get(name) {
             if let Some(entry) = self.units.get(canonical) {
@@ -675,10 +659,7 @@ impl UnitRegistry {
     }
 
     /// Get the root units (base units) for a UnitsContainer
-    pub fn get_root_units(
-        &self,
-        units: &UnitsContainer,
-    ) -> PintResult<(f64, UnitsContainer)> {
+    pub fn get_root_units(&self, units: &UnitsContainer) -> PintResult<(f64, UnitsContainer)> {
         let mut factor = 1.0_f64;
         let mut result = UnitsContainer::new();
         for (unit_name, &exp) in units.iter() {
@@ -689,10 +670,7 @@ impl UnitRegistry {
         Ok((factor, result))
     }
 
-    fn get_unit_root_units(
-        &self,
-        name: &str,
-    ) -> PintResult<(f64, UnitsContainer)> {
+    fn get_unit_root_units(&self, name: &str) -> PintResult<(f64, UnitsContainer)> {
         if let Some(canonical) = self.name_map.get(name) {
             if let Some(entry) = self.units.get(canonical) {
                 return Ok((entry.factor, entry.root_units.clone()));

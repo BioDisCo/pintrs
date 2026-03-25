@@ -414,7 +414,7 @@ class TestRegistryOperations:
         assert abs(ureg.convert(1.0, "km", "meter") - 1000) < 1e-10
 
     def test_get_base_units(self, ureg: UnitRegistry) -> None:
-        factor, unit = ureg.get_base_units("kilometer")
+        factor, _unit = ureg.get_base_units("kilometer")
         assert abs(factor - 1000) < 1e-10
 
     def test_get_name(self, ureg: UnitRegistry) -> None:

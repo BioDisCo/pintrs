@@ -38,15 +38,9 @@ impl fmt::Display for PintError {
                     f,
                     "Cannot convert from '{}' ({}) to '{}' ({})",
                     src_units,
-                    src_dim
-                        .as_ref()
-                        .map(|d| d.to_string())
-                        .unwrap_or_default(),
+                    src_dim.as_ref().map(|d| d.to_string()).unwrap_or_default(),
                     dst_units,
-                    dst_dim
-                        .as_ref()
-                        .map(|d| d.to_string())
-                        .unwrap_or_default(),
+                    dst_dim.as_ref().map(|d| d.to_string()).unwrap_or_default(),
                 )
             }
             PintError::UndefinedUnitError { unit_name } => {

@@ -27,7 +27,7 @@ class TestRegistryMethods:
         assert str(unit) == "m"
 
     def test_get_root_units(self, ureg: UnitRegistry) -> None:
-        factor, unit = ureg.get_root_units("kilometer")
+        factor, _unit = ureg.get_root_units("kilometer")
         assert abs(factor - 1000) < 1e-10
 
     def test_get_dimensionality(self, ureg: UnitRegistry) -> None:

@@ -30,41 +30,24 @@ jobs:
       - name: Create virtualenv
         run: python -m venv .venv
 
-      - name: Install dependencies (Unix)
-        if: runner.os != 'Windows'
+      - name: Activate virtualenv
+        shell: bash
         run: |
-          source .venv/bin/activate
-          pip install --upgrade pip maturin pytest numpy
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "$GITHUB_WORKSPACE/.venv/Scripts" >> "$GITHUB_PATH"
+          else
+            echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+          fi
+          echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv" >> "$GITHUB_ENV"
 
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          .venv\Scripts\activate
-          pip install --upgrade pip maturin pytest numpy
+      - name: Install dependencies
+        run: pip install maturin pytest numpy
 
-      - name: Build extension (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          source .venv/bin/activate
-          maturin develop --release
+      - name: Build extension
+        run: maturin develop --release
 
-      - name: Build extension (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          .venv\Scripts\activate
-          maturin develop --release
-
-      - name: Run tests (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          source .venv/bin/activate
-          pytest
-
-      - name: Run tests (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          .venv\Scripts\activate
-          pytest
+      - name: Run tests
+        run: pytest
 
   lint:
     name: Lint & Type Check
@@ -81,31 +64,28 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install dependencies
+      - name: Create virtualenv
+        run: python -m venv .venv
+
+      - name: Activate virtualenv
         run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          pip install --upgrade pip maturin ruff mypy numpy
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: pip install maturin ruff mypy numpy
 
       - name: Build extension
-        run: |
-          source .venv/bin/activate
-          maturin develop --release
+        run: maturin develop --release
 
       - name: Ruff check
-        run: |
-          source .venv/bin/activate
-          ruff check python/ tests/
+        run: ruff check python/ tests/
 
       - name: Ruff format check
-        run: |
-          source .venv/bin/activate
-          ruff format --check python/ tests/
+        run: ruff format --check python/ tests/
 
       - name: Mypy
-        run: |
-          source .venv/bin/activate
-          mypy python/pintrs/
+        run: mypy python/pintrs/
 
   rust:
     name: Rust checks

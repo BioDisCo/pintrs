@@ -62,8 +62,7 @@ pub fn parse_definitions(text: &str) -> Vec<Definition> {
         // Inside defaults block
         if in_defaults_block {
             if let Some((key, val)) = line.split_once('=') {
-                defaults_entries
-                    .push((key.trim().to_string(), val.trim().to_string()));
+                defaults_entries.push((key.trim().to_string(), val.trim().to_string()));
             }
             continue;
         }

@@ -1,7 +1,7 @@
 use indexmap::IndexMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::ops::{Mul, Div};
+use std::ops::{Div, Mul};
 
 /// Stores the product of unit names and their exponents.
 /// e.g. {"meter": 1, "second": -2} represents m/s^2
@@ -18,7 +18,9 @@ impl UnitsContainer {
     }
 
     pub fn from_map(map: IndexMap<String, f64>) -> Self {
-        let mut uc = Self { inner: IndexMap::new() };
+        let mut uc = Self {
+            inner: IndexMap::new(),
+        };
         for (k, v) in map {
             if v != 0.0 {
                 uc.inner.insert(k, v);
