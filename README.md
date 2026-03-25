@@ -2,31 +2,12 @@
 
 A fast, Rust-powered drop-in replacement for [pint](https://pint.readthedocs.io/) -- the Python physical units library.
 
-pintrs reimplements pint's core unit registry and quantity system in Rust via [PyO3](https://pyo3.rs/), providing the same Python API with significantly better performance for unit parsing, conversion, and arithmetic.
-
-## Features
-
-- **Drop-in replacement**: Same API as pint for `UnitRegistry`, `Quantity`, `Unit`, and common operations
-- **Fast**: Rust-native unit parsing, registry lookup, and conversion factor computation
-- **NumPy support**: `ArrayQuantity` wraps numpy arrays with unit tracking and full ufunc integration
-- **Type-safe**: Full type stubs (`.pyi`) for mypy and pyright in strict mode
-- **Measurement support**: `Measurement` class for quantities with uncertainty propagation
-- **Compatibility stubs**: `Context`, `Group`, `System` classes for code that references pint's advanced features
+pintrs reimplements pint's core unit registry and quantity system in Rust via [PyO3](https://pyo3.rs/), giving you the same Python API with significantly better performance.
 
 ## Installation
 
-### From source (requires Rust toolchain and maturin)
-
 ```bash
-pip install maturin
-maturin develop --release
-```
-
-### Running tests
-
-```bash
-pip install pytest numpy
-pytest
+pip install pintrs
 ```
 
 ## Quick start
@@ -49,6 +30,32 @@ print(speed.to("m/s")) # 0.6944... meter / second
 print(ureg.meter)      # 1 meter
 print(ureg.speed_of_light)
 ```
+
+## Performance
+
+pintrs is **10-90x faster** than pint on common operations. Benchmarks on Python 3.13 (lower is better):
+
+| Operation | pintrs | pint | Speedup |
+|---|--:|--:|--:|
+| Quantity creation | 0.35 us | 3.64 us | **10x** |
+| Parse string (`"9.81 m/s**2"`) | 0.74 us | 70.61 us | **96x** |
+| Conversion (km -> m) | 1.19 us | 8.08 us | **7x** |
+| Conversion (km/h -> m/s) | 1.68 us | 14.11 us | **8x** |
+| Addition (compatible units) | 0.94 us | 12.66 us | **13x** |
+| Multiply by scalar | 0.13 us | 5.59 us | **41x** |
+| Multiply quantities | 0.17 us | 5.38 us | **31x** |
+| Parse units (`"kg * m / s ** 2"`) | 0.95 us | 23.66 us | **25x** |
+| String formatting | 0.29 us | 8.58 us | **29x** |
+
+Run `python examples/benchmark.py` to reproduce (install `pint` for comparison).
+
+## Features
+
+- **Drop-in replacement** for pint's `UnitRegistry`, `Quantity`, `Unit`, and common operations
+- **NumPy support** via `ArrayQuantity` with full ufunc integration
+- **Type-safe** with full `.pyi` stubs for mypy and pyright in strict mode
+- **Measurement support** for quantities with uncertainty propagation
+- **Compatibility stubs** for `Context`, `Group`, `System` so existing code doesn't break
 
 ## NumPy integration
 
@@ -76,9 +83,9 @@ m = Measurement(Quantity(100.0, "meter"), 0.5)
 print(m)       # 100.0 +/- 0.5 meter
 print(m.rel)   # 0.005
 
-# Error propagation
+# Error propagation (adds in quadrature)
 m2 = Measurement(Quantity(50.0, "meter"), 0.3)
-print(m + m2)  # adds in quadrature
+print(m + m2)
 ```
 
 ## Decorators
@@ -108,27 +115,9 @@ ureg.define("smoot = 1.7018 * meter")
 print(ureg.Quantity(1, "smoot").to("meter"))  # 1.7018 meter
 ```
 
-## Architecture
-
-```
-pintrs/
-  src/              # Rust source (PyO3 extension module)
-    lib.rs          # Module entry point
-    registry.rs     # UnitRegistry: parsing, storage, conversion
-    definition.rs   # Unit definition parsing
-    parser.rs       # Expression parser
-    errors.rs       # Error types
-    units_container.rs
-  python/pintrs/    # Python package
-    __init__.py     # Public API, Measurement, Context/Group/System stubs
-    _core.pyi       # Type stubs for the Rust extension
-    numpy_support.py # ArrayQuantity with numpy ufunc support
-  tests/            # pytest suite
-```
-
 ## Compatibility with pint
 
-pintrs targets API compatibility with pint's most-used features. Supported:
+pintrs targets API compatibility with pint's most-used features:
 
 - `UnitRegistry`, `Quantity`, `Unit` with full arithmetic
 - Unit parsing, conversion, base/root/compact/reduced/preferred units
@@ -136,20 +125,14 @@ pintrs targets API compatibility with pint's most-used features. Supported:
 - Serialization via `__reduce__` (pickle) and `to_tuple`/`from_tuple`
 - `wraps` and `check` decorators
 - `Measurement` with uncertainty propagation
-- `format_babel` stubs
 - Context/Group/System stubs (API-compatible, no-op)
 
-Not yet implemented:
-
-- Full context-based conversions (spectroscopy, etc.)
-- Babel/locale formatting
-- Logarithmic units
-- pandas ExtensionArray integration
+**Not yet implemented:** full context-based conversions (spectroscopy, etc.), Babel/locale formatting, logarithmic units, pandas ExtensionArray integration.
 
 ## Development
 
 ```bash
-# Build
+# Build (requires Rust toolchain and maturin)
 maturin develop --release
 
 # Lint and format
