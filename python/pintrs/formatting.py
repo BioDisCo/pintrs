@@ -193,8 +193,12 @@ def format_quantity(quantity: Quantity, spec: str = "") -> str:
     if unit_mode == "C":
         q = quantity.to_compact()
 
-    mag_str = format(q.magnitude, mag_fmt) if mag_fmt else _format_default_magnitude(
-        q.magnitude,
+    mag_str = (
+        format(q.magnitude, mag_fmt)
+        if mag_fmt
+        else _format_default_magnitude(
+            q.magnitude,
+        )
     )
 
     unit_spec = ("~" if use_abbrev else "") + unit_mode

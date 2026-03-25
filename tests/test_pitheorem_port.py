@@ -21,9 +21,7 @@ class TestPiTheorem:
         assert group["L"] == pytest.approx(-1.0)
 
     def test_pendulum(self, ureg: UnitRegistry) -> None:
-        result = ureg.pi_theorem(
-            {"T": "s", "M": "grams", "L": "m", "g": "m/s**2"}
-        )
+        result = ureg.pi_theorem({"T": "s", "M": "grams", "L": "m", "g": "m/s**2"})
         assert len(result) == 1
         group = result[0]
         assert group["g"] == pytest.approx(1.0)
@@ -50,20 +48,24 @@ class TestPiTheorem:
         assert len(result) >= 1
 
     def test_fluid_dynamics(self, ureg: UnitRegistry) -> None:
-        result = ureg.pi_theorem({
-            "rho": "kg/m**3",
-            "v": "m/s",
-            "L": "m",
-            "mu": "Pa*s",
-        })
+        result = ureg.pi_theorem(
+            {
+                "rho": "kg/m**3",
+                "v": "m/s",
+                "L": "m",
+                "mu": "Pa*s",
+            }
+        )
         assert len(result) == 1
 
     def test_heat_transfer(self, ureg: UnitRegistry) -> None:
-        result = ureg.pi_theorem({
-            "h": "W/(m**2*K)",
-            "L": "m",
-            "k": "W/(m*K)",
-        })
+        result = ureg.pi_theorem(
+            {
+                "h": "W/(m**2*K)",
+                "L": "m",
+                "k": "W/(m*K)",
+            }
+        )
         assert len(result) == 1
 
     def test_different_unit_styles(self, ureg: UnitRegistry) -> None:

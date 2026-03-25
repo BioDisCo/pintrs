@@ -67,9 +67,7 @@ class TestCreationEdgeCases:
         assert q2.magnitude == 4.2
         assert str(q2.units) == "m"
 
-    def test_quantity_from_quantity_with_conversion(
-        self, ureg: UnitRegistry
-    ) -> None:
+    def test_quantity_from_quantity_with_conversion(self, ureg: UnitRegistry) -> None:
         q1 = ureg.Quantity(1.0, "kilometer")
         q2 = ureg.Quantity(q1, "meter")
         assert abs(q2.magnitude - 1000.0) < 1e-10
@@ -274,9 +272,7 @@ class TestArithmeticEdgeCases:
         result = 10.0 / q
         assert result.magnitude == 5.0
 
-    def test_div_same_units_gives_dimensionless(
-        self, ureg: UnitRegistry
-    ) -> None:
+    def test_div_same_units_gives_dimensionless(self, ureg: UnitRegistry) -> None:
         a = ureg.Quantity(10.0, "meter")
         b = ureg.Quantity(5.0, "meter")
         result = a / b
@@ -386,9 +382,7 @@ class TestComparisonEdgeCases:
         q = ureg.Quantity(float("nan"), "meter")
         assert q != q  # noqa: PLR0124
 
-    def test_dimensionless_eq_scalar_via_float(
-        self, ureg: UnitRegistry
-    ) -> None:
+    def test_dimensionless_eq_scalar_via_float(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3, "meter") / ureg.Quantity(1, "meter")
         assert float(q) == 3.0
 
@@ -431,16 +425,12 @@ class TestTemperatureEdgeCases:
         result = q.to("degree_Celsius")
         assert abs(result.magnitude) < 1e-6
 
-    def test_absolute_zero_kelvin_to_celsius(
-        self, ureg: UnitRegistry
-    ) -> None:
+    def test_absolute_zero_kelvin_to_celsius(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(0, "kelvin")
         result = q.to("degree_Celsius")
         assert abs(result.magnitude - (-273.15)) < 1e-6
 
-    def test_absolute_zero_kelvin_to_fahrenheit(
-        self, ureg: UnitRegistry
-    ) -> None:
+    def test_absolute_zero_kelvin_to_fahrenheit(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(0, "kelvin")
         result = q.to("degree_Fahrenheit")
         assert abs(result.magnitude - (-459.67)) < 1e-2
@@ -472,9 +462,7 @@ class TestTemperatureEdgeCases:
         result = q.to("kelvin").to("degree_Fahrenheit")
         assert abs(result.magnitude - original) < 1e-10
 
-    def test_convert_registry_celsius_to_kelvin(
-        self, ureg: UnitRegistry
-    ) -> None:
+    def test_convert_registry_celsius_to_kelvin(self, ureg: UnitRegistry) -> None:
         val = ureg.convert(100, "degree_Celsius", "kelvin")
         assert abs(val - 373.15) < 1e-6
 
@@ -595,16 +583,12 @@ class TestDimensionalityEdgeCases:
         q = ureg.Quantity(1, "meter ** 3")
         assert "[length] ** 3" in q.dimensionality
 
-    def test_is_compatible_with_same_dimension(
-        self, ureg: UnitRegistry
-    ) -> None:
+    def test_is_compatible_with_same_dimension(self, ureg: UnitRegistry) -> None:
         assert ureg.Quantity(1, "meter").is_compatible_with("foot")
         assert ureg.Quantity(1, "meter").is_compatible_with("kilometer")
         assert ureg.Quantity(1, "meter").is_compatible_with("inch")
 
-    def test_is_compatible_with_different_dimension(
-        self, ureg: UnitRegistry
-    ) -> None:
+    def test_is_compatible_with_different_dimension(self, ureg: UnitRegistry) -> None:
         assert not ureg.Quantity(1, "meter").is_compatible_with("second")
         assert not ureg.Quantity(1, "meter").is_compatible_with("kilogram")
 
@@ -974,9 +958,7 @@ class TestUnitOperations:
         val = u.m_from(ureg.Quantity(1, "km"))
         assert abs(val - 1000) < 1e-10
 
-    def test_unit_mul_scalar_gives_quantity(
-        self, ureg: UnitRegistry
-    ) -> None:
+    def test_unit_mul_scalar_gives_quantity(self, ureg: UnitRegistry) -> None:
         u = ureg.Unit("meter")
         result = 5 * u
         assert isinstance(result, Quantity)
