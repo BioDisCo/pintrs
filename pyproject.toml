@@ -9,6 +9,7 @@ description = "Fast Rust-based Python extension for physical unit manipulation"
 requires-python = ">=3.12"
 authors = [{ name = "Thomas Nowak", email = "thomas@thomasnowak.net" }]
 license = "Apache-2.0"
+readme = "README.md"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
