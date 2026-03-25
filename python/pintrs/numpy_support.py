@@ -567,7 +567,7 @@ if has_numpy:
             input_units: list[Unit | None],
         ) -> list[NDArray[Any] | float]:
             """Check dimensionality and convert units for add/subtract."""
-            from pintrs import DimensionalityError
+            from pintrs import DimensionalityError  # noqa: PLC0415
 
             if ufunc not in self._MATCHING_DIMS_UFUNCS:
                 return processed
@@ -600,7 +600,7 @@ if has_numpy:
             input_units: list[Unit | None],
         ) -> list[NDArray[Any] | float]:
             """Validate and convert units for trig/exp/log ufuncs."""
-            from pintrs import DimensionalityError
+            from pintrs import DimensionalityError  # noqa: PLC0415
 
             if ufunc in self._TRIG_UFUNCS:
                 u = input_units[0] if input_units else None

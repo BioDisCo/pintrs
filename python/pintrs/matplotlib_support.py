@@ -60,7 +60,7 @@ def setup_matplotlib(enable: bool = True) -> None:
     if not has_matplotlib:
         return
 
-    from pintrs._core import Quantity as _Quantity
+    from pintrs._core import Quantity as _Quantity  # noqa: PLC0415
 
     if enable:
         munits.registry[_Quantity] = PintConverter()  # type: ignore[index,assignment,unused-ignore]

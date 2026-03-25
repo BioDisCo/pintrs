@@ -487,7 +487,8 @@ impl UnitRegistry {
         let result = self.eval_unit_expr_tokens(&tokens)?;
 
         if self.unit_expr_cache.len() < UNIT_CACHE_MAX {
-            self.unit_expr_cache.insert(expr.to_string(), result.clone());
+            self.unit_expr_cache
+                .insert(expr.to_string(), result.clone());
         }
 
         Ok(result)

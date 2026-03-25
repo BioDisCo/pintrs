@@ -1374,8 +1374,7 @@ impl PyQuantity {
             }
         } else if let Ok(val) = other.extract::<f64>() {
             if self.units.is_empty() {
-                return Ok((self.magnitude - val).abs()
-                    < f64::EPSILON * val.abs().max(1.0));
+                return Ok((self.magnitude - val).abs() < f64::EPSILON * val.abs().max(1.0));
             }
             let mut reg = self.registry.lock().unwrap();
             let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;

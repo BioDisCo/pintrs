@@ -166,7 +166,7 @@ class LogarithmicQuantity:
         linear = self.to_linear() * ref_value
         if self._registry is not None:
             return self._registry.Quantity(linear, ref_unit)
-        from pintrs._core import Quantity
+        from pintrs._core import Quantity  # noqa: PLC0415
 
         return Quantity(linear, ref_unit)
 

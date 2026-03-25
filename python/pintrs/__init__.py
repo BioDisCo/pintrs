@@ -555,7 +555,7 @@ def _register_delta_units(ureg: UnitRegistry) -> None:
 def _is_array_like(value: Any) -> bool:
     """Check if value is a numpy array or array-like (not a scalar/string)."""
     try:
-        import numpy as np
+        import numpy as np  # noqa: PLC0415
 
         return isinstance(value, np.ndarray | list) and not isinstance(value, str)
     except ImportError:
@@ -614,7 +614,7 @@ def _ureg_setup_matplotlib(
     enable: bool = True,
 ) -> None:
     """Enable or disable matplotlib integration for pintrs Quantities."""
-    from pintrs.matplotlib_support import setup_matplotlib
+    from pintrs.matplotlib_support import setup_matplotlib  # noqa: PLC0415
 
     setup_matplotlib(enable)
 
@@ -745,7 +745,7 @@ def _ureg_parse_pattern(
     input_string: str,
 ) -> Any:
     """Stub for parse_pattern."""
-    import re
+    import re  # noqa: PLC0415
 
     return re.findall(pattern, input_string)
 
@@ -1032,7 +1032,7 @@ UnitRegistry.set_fmt_locale = _ureg_set_fmt_locale  # type: ignore[attr-defined]
 def _is_duck_array(value: Any) -> bool:
     """Check if value is an array-like that should become ArrayQuantity."""
     try:
-        import numpy as np
+        import numpy as np  # noqa: PLC0415
 
         if isinstance(value, np.ndarray):
             return True
@@ -1064,7 +1064,7 @@ def _ureg_quantity(self: UnitRegistry, value: Any, units: Any = None) -> Any:  #
     if vtype is str:
         return self._scalar_quantity(value, None)
 
-    from pintrs.numpy_support import ArrayQuantity as _ArrayQuantity
+    from pintrs.numpy_support import ArrayQuantity as _ArrayQuantity  # noqa: PLC0415
 
     # Quantity(ArrayQuantity, new_units) -> convert
     if isinstance(value, _ArrayQuantity):
@@ -1079,7 +1079,7 @@ def _ureg_quantity(self: UnitRegistry, value: Any, units: Any = None) -> Any:  #
     # Array-like -> ArrayQuantity
     if _is_duck_array(value):
         try:
-            import numpy as np
+            import numpy as np  # noqa: PLC0415
 
             units_str = str(units) if units is not None else "dimensionless"
             arr = np.asarray(value) if not isinstance(value, np.ndarray) else value
@@ -1091,7 +1091,7 @@ def _ureg_quantity(self: UnitRegistry, value: Any, units: Any = None) -> Any:  #
     cfg = _get_config(self)
     if cfg.get("force_ndarray"):
         try:
-            import numpy as np
+            import numpy as np  # noqa: PLC0415
 
             units_str = str(units) if units is not None else "dimensionless"
             return _ArrayQuantity(np.asarray(value), units_str, self)
@@ -1191,7 +1191,7 @@ def _q_dtype(self: Any) -> Any:
     if hasattr(m, "dtype"):
         return m.dtype
     try:
-        import numpy as np
+        import numpy as np  # noqa: PLC0415
 
         return np.dtype(type(m))
     except ImportError:
@@ -1319,7 +1319,7 @@ def _q_tolist(self: Any) -> Any:
 def _q_from_list(_cls: Any, lst: list[Any], units: str | None = None) -> Any:
     """Create a Quantity from a list of Quantities."""
     try:
-        import numpy as np
+        import numpy as np  # noqa: PLC0415
     except ImportError as e:
         msg = "from_list requires numpy"
         raise ImportError(msg) from e
@@ -1417,7 +1417,7 @@ def _quantity_format_babel(self: Any, locale: str = "en") -> str:
         Locale-formatted string like "1.000,5 Meter" (de_DE).
     """
     try:
-        from babel.numbers import format_decimal
+        from babel.numbers import format_decimal  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
     except ImportError:
         return str(self)
     mag_str = format_decimal(self.magnitude, locale=locale)
@@ -1463,7 +1463,7 @@ Unit.__format__ = _unit_format  # type: ignore[attr-defined,assignment]
 
 def _unit_systems(self: Unit) -> frozenset[str]:
     """Return the set of system names this unit belongs to."""
-    from pintrs.system import System
+    from pintrs.system import System  # noqa: PLC0415
 
     # Use canonical names from the units dict
     unit_names = {name for name, _ in self._units_dict()}
