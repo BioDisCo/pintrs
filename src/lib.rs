@@ -54,8 +54,8 @@ pyo3::create_exception!(
     "Raised when redefining an existing unit."
 );
 
-fn to_py_err(e: PintError) -> PyErr {
-    match e {
+fn to_py_err(e: Box<PintError>) -> PyErr {
+    match *e {
         PintError::DimensionalityError { .. } => DimensionalityError::new_err(e.to_string()),
         PintError::UndefinedUnitError { .. } => UndefinedUnitError::new_err(e.to_string()),
         PintError::OffsetUnitCalculusError { .. } => {
@@ -291,7 +291,7 @@ impl PyUnitRegistry {
     /// Parse a unit name into (prefix, unit_name, suffix) tuples.
     fn parse_unit_name(&self, name: &str) -> PyResult<Vec<(String, String, String)>> {
         let reg = self.inner.lock().unwrap();
-        let canonical = match reg.get_canonical_name(name) {
+        let _canonical = match reg.get_canonical_name(name) {
             Ok(c) => c,
             Err(e) => return Err(to_py_err(e)),
         };
@@ -603,7 +603,7 @@ impl PyQuantity {
 
         for &(prefix_name, prefix_factor) in SI_PREFIXES {
             let scaled = abs_mag / prefix_factor;
-            if scaled >= 1.0 && scaled < 1000.0 {
+            if (1.0..1000.0).contains(&scaled) {
                 match best_factor {
                     None => {
                         best_prefix = prefix_name;

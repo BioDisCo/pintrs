@@ -3,6 +3,7 @@ use std::fmt;
 use crate::units_container::UnitsContainer;
 
 #[derive(Debug, Clone)]
+#[allow(clippy::enum_variant_names, dead_code)]
 pub enum PintError {
     DimensionalityError {
         src_units: String,
@@ -68,4 +69,4 @@ impl fmt::Display for PintError {
 
 impl std::error::Error for PintError {}
 
-pub type PintResult<T> = Result<T, PintError>;
+pub type PintResult<T> = Result<T, Box<PintError>>;

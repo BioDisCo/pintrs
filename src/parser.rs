@@ -27,7 +27,7 @@ pub fn parse_definitions(text: &str) -> Vec<Definition> {
         if line.starts_with('@') {
             if line == "@end" {
                 if in_defaults_block {
-                    defs.push(Definition::Defaults(defaults_entries.clone()));
+                    defs.push(Definition::Defaults(()));
                     defaults_entries.clear();
                     in_defaults_block = false;
                 }

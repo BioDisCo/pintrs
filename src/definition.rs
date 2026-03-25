@@ -41,7 +41,7 @@ pub enum Definition {
     Unit(UnitDef),
     Dimension(DimensionDef),
     Alias(AliasDef),
-    Defaults(Vec<(String, String)>),
+    Defaults(()),
     Comment,
     Import(String),
 }

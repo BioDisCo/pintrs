@@ -19,12 +19,10 @@ pub struct UnitEntry {
     pub offset: f64,
     pub symbol: Option<String>,
     pub aliases: Vec<String>,
-    pub is_base: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct PrefixEntry {
-    pub name: String,
     pub factor: f64,
     pub symbol: Option<String>,
     pub aliases: Vec<String>,
@@ -146,7 +144,6 @@ impl UnitRegistry {
 
     fn add_prefix(&mut self, p: &PrefixDef) {
         let entry = PrefixEntry {
-            name: p.name.clone(),
             factor: p.factor,
             symbol: p.symbol.clone(),
             aliases: p.aliases.clone(),
@@ -175,7 +172,6 @@ impl UnitRegistry {
                 offset: def.offset.unwrap_or(0.0),
                 symbol: def.symbol.clone(),
                 aliases: def.aliases.clone(),
-                is_base: true,
             };
             self.register_unit(entry);
             self.dimensions.insert(dim_name, None);
@@ -193,7 +189,6 @@ impl UnitRegistry {
             offset: def.offset.unwrap_or(0.0),
             symbol: def.symbol.clone(),
             aliases: def.aliases.clone(),
-            is_base: false,
         };
 
         self.register_unit(entry);
@@ -396,9 +391,9 @@ impl UnitRegistry {
             }
         }
 
-        Err(PintError::UndefinedUnitError {
+        Err(Box::new(PintError::UndefinedUnitError {
             unit_name: name.to_string(),
-        })
+        }))
     }
 
     /// Try to strip a prefix from a unit name.
@@ -460,9 +455,9 @@ impl UnitRegistry {
             return Ok(format!("{}(prefixed)", canonical));
         }
 
-        Err(PintError::UndefinedUnitError {
+        Err(Box::new(PintError::UndefinedUnitError {
             unit_name: name.to_string(),
-        })
+        }))
     }
 
     /// Parse a unit expression string like "kg*m/s^2" into a UnitsContainer (canonical names).
@@ -567,9 +562,9 @@ impl UnitRegistry {
             return Ok(name.to_string());
         }
 
-        Err(PintError::UndefinedUnitError {
+        Err(Box::new(PintError::UndefinedUnitError {
             unit_name: name.to_string(),
-        })
+        }))
     }
 
     /// Get the dimensionality of a units container
@@ -597,9 +592,9 @@ impl UnitRegistry {
             }
         }
 
-        Err(PintError::UndefinedUnitError {
+        Err(Box::new(PintError::UndefinedUnitError {
             unit_name: name.to_string(),
-        })
+        }))
     }
 
     /// Get the conversion factor between two unit containers.
@@ -614,12 +609,12 @@ impl UnitRegistry {
         let dst_dim = self.get_dimensionality(dst)?;
 
         if src_dim != dst_dim {
-            return Err(PintError::DimensionalityError {
+            return Err(Box::new(PintError::DimensionalityError {
                 src_units: src.to_string(),
                 dst_units: dst.to_string(),
                 src_dim: Some(src_dim),
                 dst_dim: Some(dst_dim),
-            });
+            }));
         }
 
         let src_factor = self.get_root_factor(src)?;
@@ -653,9 +648,9 @@ impl UnitRegistry {
             }
         }
 
-        Err(PintError::UndefinedUnitError {
+        Err(Box::new(PintError::UndefinedUnitError {
             unit_name: name.to_string(),
-        })
+        }))
     }
 
     /// Get the root units (base units) for a UnitsContainer
@@ -683,9 +678,9 @@ impl UnitRegistry {
             }
         }
 
-        Err(PintError::UndefinedUnitError {
+        Err(Box::new(PintError::UndefinedUnitError {
             unit_name: name.to_string(),
-        })
+        }))
     }
 
     /// Get the offset for a unit
@@ -744,12 +739,12 @@ impl UnitRegistry {
         let src_dim = self.get_dimensionality(src)?;
         let dst_dim = self.get_dimensionality(dst)?;
         if src_dim != dst_dim {
-            return Err(PintError::DimensionalityError {
+            return Err(Box::new(PintError::DimensionalityError {
                 src_units: src.to_string(),
                 dst_units: dst.to_string(),
                 src_dim: Some(src_dim),
                 dst_dim: Some(dst_dim),
-            });
+            }));
         }
 
         // Simple case: single unit on each side
@@ -787,36 +782,6 @@ impl UnitRegistry {
         self.try_strip_prefix(name).is_some()
     }
 
-    /// Ensure a prefixed unit is registered (lazy registration)
-    pub fn ensure_unit(&mut self, name: &str) -> PintResult<()> {
-        if self.name_map.contains_key(name) {
-            return Ok(());
-        }
-
-        // Try to create prefixed unit entry
-        if let Some((prefix_factor, base_canonical)) = self.try_strip_prefix(name) {
-            if let Some(base_entry) = self.units.get(&base_canonical).cloned() {
-                let entry = UnitEntry {
-                    name: name.to_string(),
-                    factor: prefix_factor * base_entry.factor,
-                    root_units: base_entry.root_units.clone(),
-                    dimensionality: base_entry.dimensionality.clone(),
-                    offset: base_entry.offset,
-                    symbol: None,
-                    aliases: Vec::new(),
-                    is_base: false,
-                };
-                self.name_map.insert(name.to_string(), name.to_string());
-                self.units.insert(name.to_string(), entry);
-                return Ok(());
-            }
-        }
-
-        Err(PintError::UndefinedUnitError {
-            unit_name: name.to_string(),
-        })
-    }
-
     /// Define a new unit at runtime (e.g. from ureg.define())
     pub fn define_unit(&mut self, def: &UnitDef) -> PintResult<()> {
         self.try_add_unit(def)
@@ -842,11 +807,6 @@ impl UnitRegistry {
             .iter()
             .map(|(name, entry)| (name.clone(), entry.factor))
             .collect()
-    }
-
-    /// Get the root factor for a units container (public wrapper)
-    pub fn get_root_factor_pub(&self, units: &UnitsContainer) -> PintResult<f64> {
-        self.get_root_factor(units)
     }
 
     /// Get all canonical unit names
