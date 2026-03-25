@@ -36,7 +36,7 @@ if has_matplotlib:
         def axisinfo(unit: Any, axis: Any) -> munits.AxisInfo | None:  # noqa: ARG004
             """Return axis label from unit."""
             if unit is not None:
-                return munits.AxisInfo(label=str(unit))  # type: ignore[no-untyped-call]
+                return munits.AxisInfo(label=str(unit))  # type: ignore[no-untyped-call,unused-ignore]
             return None
 
         @staticmethod

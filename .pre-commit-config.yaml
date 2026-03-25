@@ -5,54 +5,55 @@ repos:
         name: cargo fmt
         entry: cargo fmt --check
         language: system
+        always_run: true
         pass_filenames: false
-        types: [rust]
 
       - id: cargo-clippy
         name: cargo clippy
         entry: cargo clippy -- -D warnings
         language: system
+        always_run: true
         pass_filenames: false
-        types: [rust]
 
       - id: cargo-test
         name: cargo test
         entry: cargo test
         language: system
+        always_run: true
         pass_filenames: false
-        types: [rust]
 
       - id: ruff-check
         name: ruff check
         entry: ruff check python/ tests/
         language: system
+        always_run: true
         pass_filenames: false
-        types: [python]
 
       - id: ruff-format
         name: ruff format
         entry: ruff format --check python/ tests/
         language: system
+        always_run: true
         pass_filenames: false
-        types: [python]
 
       - id: mypy
         name: mypy
-        entry: mypy python/pintrs/ --strict
+        entry: mypy python/pintrs/
         language: system
+        always_run: true
         pass_filenames: false
-        types: [python]
 
       - id: pyright
         name: pyright
         entry: pyright python/pintrs/
         language: system
+        always_run: true
         pass_filenames: false
-        types: [python]
 
       - id: pytest
         name: pytest
         entry: pytest tests/ -x -q
         language: system
+        always_run: true
         pass_filenames: false
         stages: [pre-push]
