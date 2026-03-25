@@ -1024,7 +1024,7 @@ mod tests {
 
     #[test]
     fn test_conversion() {
-        let reg = UnitRegistry::new().unwrap();
+        let mut reg = UnitRegistry::new().unwrap();
         let km = UnitsContainer::from_single("kilometer".to_string(), 1.0);
         let m = UnitsContainer::from_single("meter".to_string(), 1.0);
         let factor = reg.get_conversion_factor(&km, &m).unwrap();
@@ -1033,7 +1033,7 @@ mod tests {
 
     #[test]
     fn test_dimensionality_check() {
-        let reg = UnitRegistry::new().unwrap();
+        let mut reg = UnitRegistry::new().unwrap();
         let m = UnitsContainer::from_single("meter".to_string(), 1.0);
         let s = UnitsContainer::from_single("second".to_string(), 1.0);
         assert!(reg.get_conversion_factor(&m, &s).is_err());
@@ -1041,7 +1041,7 @@ mod tests {
 
     #[test]
     fn test_meter_dimensionality() {
-        let reg = UnitRegistry::new().unwrap();
+        let mut reg = UnitRegistry::new().unwrap();
         let m = UnitsContainer::from_single("meter".to_string(), 1.0);
         let dim = reg.get_dimensionality(&m).unwrap();
         assert!(!dim.is_empty());

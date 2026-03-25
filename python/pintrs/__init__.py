@@ -1417,7 +1417,7 @@ def _quantity_format_babel(self: Any, locale: str = "en") -> str:
         Locale-formatted string like "1.000,5 Meter" (de_DE).
     """
     try:
-        from babel.numbers import format_decimal  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
+        from babel.numbers import format_decimal  # noqa: PLC0415
     except ImportError:
         return str(self)
     mag_str = format_decimal(self.magnitude, locale=locale)
