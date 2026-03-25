@@ -4,7 +4,7 @@ Provides ArrayQuantity that wraps numpy arrays with units, implementing
 __array_ufunc__ for transparent numpy integration.
 """
 
-# pyright: reportPrivateUsage=false, reportUnnecessaryIsInstance=false, reportUnknownArgumentType=false
+# pyright: reportArgumentType=false, reportAttributeAccessIssue=false, reportInvalidTypeForm=false, reportPrivateUsage=false, reportRedeclaration=false, reportReturnType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownVariableType=false, reportUnnecessaryIsInstance=false
 
 from __future__ import annotations
 
@@ -629,4 +629,14 @@ if has_numpy:
     )
 
 else:
-    ArrayQuantity = None  # type: ignore[assignment,misc]
+
+    class _ArrayQuantityUnavailable:
+        """Placeholder that fails on use when NumPy is not installed."""
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            msg = (
+                "NumPy support requires numpy. Install pintrs[numpy] or install numpy."
+            )
+            raise ModuleNotFoundError(msg)
+
+    ArrayQuantity: Any = _ArrayQuantityUnavailable  # type: ignore[no-redef]

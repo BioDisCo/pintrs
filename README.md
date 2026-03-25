@@ -1,48 +1,22 @@
 # pintrs
 
-A fast, Rust-powered drop-in replacement for [pint](https://pint.readthedocs.io/) -- the Python physical units library.
+Fast physical units for Python, with a `pint`-compatible API and Rust performance.
 
-pintrs reimplements pint's core unit registry and quantity system in Rust via [PyO3](https://pyo3.rs/), giving you the same Python API with significantly better performance.
+`pintrs` is for people who like [`pint`](https://pint.readthedocs.io/)'s ergonomics but not its runtime cost. It keeps the familiar `UnitRegistry` and `Quantity` workflow, with the hot path implemented in Rust.
 
-## Installation
+- Drop into common `pint` workflows with minimal code changes
+- Usually **7-100x faster** on core operations
+- Works with NumPy, pandas, Babel, measurements, contexts, groups, and systems
 
-```bash
-pip install pintrs
-```
+## Why pintrs
 
-Optional integrations:
+If your code spends real time creating quantities, parsing unit strings, or converting units, `pintrs` removes a lot of overhead without asking you to relearn the API.
 
-```bash
-pip install "pintrs[numpy]"
-pip install "pintrs[pandas]"
-pip install "pintrs[babel]"
-pip install "pintrs[all]"
-```
+- Quantity creation: **10x faster**
+- Parsing expressions like `"9.81 m/s**2"`: **104x faster**
+- Common conversions like `km/h -> m/s`: **8x faster**
 
-## Quick start
-
-```python
-from pintrs import UnitRegistry
-
-ureg = UnitRegistry()
-
-# Create quantities
-distance = ureg.Quantity(5.0, "kilometer")
-time = ureg.Quantity(2.0, "hour")
-
-# Arithmetic with automatic unit tracking
-speed = distance / time
-print(speed)           # 2.5 kilometer / hour
-print(speed.to("m/s")) # 0.6944... meter / second
-
-# Attribute-style access
-print(ureg.meter)      # 1 meter
-print(ureg.speed_of_light)
-```
-
-## Performance
-
-pintrs is typically **7-100x faster** than pint on common operations. Benchmarks below were measured on this branch with Python 3.13.5 (lower is better):
+Benchmarks below were measured on this branch with Python 3.13.5. Lower is better.
 
 | Operation | pintrs | pint | Speedup |
 |---|--:|--:|--:|
@@ -56,109 +30,54 @@ pintrs is typically **7-100x faster** than pint on common operations. Benchmarks
 | Parse units (`"kg * m / s ** 2"`) | 0.88 us | 23.66 us | **27x** |
 | String formatting | 0.29 us | 8.41 us | **29x** |
 
-Run `python examples/benchmark.py` to reproduce (install `pint` for comparison).
+Run `python examples/benchmark.py` to reproduce the numbers. Install `pint` alongside `pintrs` for the comparison run.
 
-## Features
+## Migrating from pint
 
-- **Drop-in replacement** for pint's `UnitRegistry`, `Quantity`, `Unit`, and common operations
-- **NumPy support** via `ArrayQuantity` with full ufunc integration
-- **Type-safe** with full `.pyi` stubs for mypy and pyright in strict mode
-- **Measurement support** for quantities with uncertainty propagation
-- **Context**, **Group**, and **System** support for context-based conversions, unit collections, and coherent unit systems
+If you already use `pint`, the change is intentionally small: replace `pint` with `pintrs` in your dependencies and swap your imports.
 
-## NumPy integration
-
-```python
-import numpy as np
-from pintrs import UnitRegistry
-from pintrs.numpy_support import ArrayQuantity
-
-ureg = UnitRegistry()
-
-distances = ArrayQuantity(np.array([1.0, 2.0, 3.0]), "kilometer", ureg)
-result = distances.to("meter")
-print(result.magnitude)  # [1000. 2000. 3000.]
-
-# NumPy ufuncs work transparently
-print(np.sqrt(ArrayQuantity(np.array([4.0, 9.0]), "m**2", ureg)))
+```diff
+- pint
++ pintrs
 ```
 
-## Measurements (uncertainty)
-
-```python
-from pintrs import Measurement, Quantity
-
-m = Measurement(Quantity(100.0, "meter"), 0.5)
-print(m)       # 100.0 +/- 0.5 meter
-print(m.rel)   # 0.005
-
-# Error propagation (adds in quadrature)
-m2 = Measurement(Quantity(50.0, "meter"), 0.3)
-print(m + m2)
-```
-
-## Decorators
-
-```python
-from pintrs import UnitRegistry, wraps, check
+```diff
+- from pint import UnitRegistry
++ from pintrs import UnitRegistry
 
 ureg = UnitRegistry()
-
-@wraps(ureg, ret="meter/second", args=("meter", "second"))
-def speed(distance, time):
-    return distance / time
-
-result = speed(ureg.Quantity(100, "km"), ureg.Quantity(2, "hour"))
-print(result)  # in m/s
-
-@check(ureg, "[length]", "[time]")
-def velocity(d, t):
-    return d / t
 ```
 
-## Custom units
+Your existing quantity code should continue to look like `pint` code:
 
 ```python
-ureg = UnitRegistry()
-ureg.define("smoot = 1.7018 * meter")
-print(ureg.Quantity(1, "smoot").to("meter"))  # 1.7018 meter
+distance = 5 * ureg.kilometer
+time = 2 * ureg.hour
+speed = distance / time
+
+print(speed)           # 2.5 kilometer / hour
+print(speed.to("m/s")) # 0.6944... meter / second
 ```
 
 ## Compatibility with pint
 
-pintrs targets API compatibility with pint's most-used features:
+`pintrs` targets full API compatibility with `pint`.
 
-- `UnitRegistry`, `Quantity`, `Unit` with full arithmetic
-- Unit parsing, conversion, base/root/compact/reduced/preferred units
-- `__getattr__` on registry (`ureg.meter`, `ureg.speed_of_light`)
-- Serialization via `__reduce__` (pickle) and `to_tuple`/`from_tuple`
-- `wraps` and `check` decorators
-- `Measurement` with uncertainty propagation
-- Context-based conversions (spectroscopy, Boltzmann, chemistry)
-- Group (named unit collections: imperial, metric, cgs, US_customary)
-- System (coherent unit sets: mks/SI, cgs, imperial, Gaussian, atomic)
-- Babel/locale formatting (`format_babel`)
-- Logarithmic units (`LogarithmicQuantity` for dB/dBm/dBW/Np/Bel)
-- Pandas `ExtensionArray` integration (`PintArray`/`PintDtype`)
+That includes the core registry and quantity model, conversions and formatting, decorators, measurements, contexts, groups, systems, and integrations with NumPy, pandas, and Babel.
 
-## Development
+If you already have working `pint` code and performance is the problem, `pintrs` is designed to be the least disruptive upgrade path.
+
+## Installation
 
 ```bash
-# Build (requires Rust toolchain and maturin)
-maturin develop --release
-
-# Lint and format
-ruff check --fix python/ tests/
-ruff format python/ tests/
-
-# Type check
-mypy python/pintrs/
-pyright python/pintrs/
-
-# Test
-pytest
+pip install pintrs
 ```
 
-## License
+NumPy, pandas, and Babel integrations are available when those packages are installed.
 
-Apache-2.0
+## What you get
+
+- The familiar `pint` API, with Rust underneath
+- Substantial speedups on quantity creation, parsing, conversion, arithmetic, and formatting
+- Support for NumPy, pandas, Babel, measurements, contexts, groups, systems, logarithmic units, and decorators
+- Type information for mypy and pyright

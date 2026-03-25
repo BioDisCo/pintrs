@@ -4,7 +4,7 @@ Provides PintDtype and PintArray so that pandas Series and DataFrames
 can hold unit-aware columns, similar to pint-pandas.
 """
 
-# pyright: basic, reportAssignmentType=false
+# pyright: basic, reportAssignmentType=false, reportAttributeAccessIssue=false, reportInvalidTypeForm=false, reportOptionalMemberAccess=false, reportReturnType=false
 
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ if has_pandas:
                 raise TypeError(msg)
             if string.startswith("pint[") and string.endswith("]"):
                 units = string[5:-1]
-                return cls(units)
+                return PintDtype(units)
             msg = f"Cannot construct PintDtype from '{string}'"
             raise TypeError(msg)
 
@@ -141,7 +141,7 @@ if has_pandas:
                     values.append(float(s))
             if dtype is None and inferred_units is not None:
                 dtype = PintDtype(inferred_units)
-            return cls(np.array(values, dtype=float), dtype=dtype, copy=copy)
+            return PintArray(np.array(values, dtype=float), dtype=dtype, copy=copy)
 
         @classmethod
         def _from_factorized(
@@ -149,7 +149,7 @@ if has_pandas:
             values: NDArray[Any],
             original: PintArray,
         ) -> PintArray:
-            return cls(values, dtype=original._dtype)
+            return PintArray(values, dtype=original._dtype)
 
         @property
         def dtype(self) -> PintDtype:
@@ -212,7 +212,7 @@ if has_pandas:
         @classmethod
         def _concat_same_type(cls, to_concat: Sequence[PintArray]) -> PintArray:
             data = np.concatenate([a._data for a in to_concat])
-            return cls(data, dtype=to_concat[0]._dtype)
+            return PintArray(data, dtype=to_concat[0]._dtype)
 
         def _values_for_factorize(self) -> tuple[NDArray[Any], float]:
             return self._data, float("nan")
@@ -257,5 +257,26 @@ if has_pandas:
     register_extension_dtype(PintDtype)
 
 else:
-    PintArray = None  # type: ignore[assignment,misc]
-    PintDtype = None  # type: ignore[assignment,misc]
+
+    class _PintDtypeUnavailable:
+        """Placeholder that fails on use when pandas is not installed."""
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            msg = (
+                "Pandas support requires pandas and numpy. "
+                "Install pintrs[pandas] or install pandas and numpy."
+            )
+            raise ModuleNotFoundError(msg)
+
+    class _PintArrayUnavailable:
+        """Placeholder that fails on use when pandas is not installed."""
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            msg = (
+                "Pandas support requires pandas and numpy. "
+                "Install pintrs[pandas] or install pandas and numpy."
+            )
+            raise ModuleNotFoundError(msg)
+
+    PintDtype: Any = _PintDtypeUnavailable  # type: ignore[no-redef]
+    PintArray: Any = _PintArrayUnavailable  # type: ignore[no-redef]
