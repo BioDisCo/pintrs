@@ -15,3 +15,6 @@ dist/
 .idea/
 .vscode/
 *.swp
+
+# agents
+CLAUDE.md
