@@ -11,6 +11,7 @@ pub struct UnitsContainer {
 }
 
 impl UnitsContainer {
+    #[inline]
     pub fn new() -> Self {
         Self {
             inner: IndexMap::new(),
@@ -29,6 +30,7 @@ impl UnitsContainer {
         uc
     }
 
+    #[inline]
     pub fn from_single(name: String, exp: f64) -> Self {
         let mut inner = IndexMap::new();
         if exp != 0.0 {
@@ -37,26 +39,32 @@ impl UnitsContainer {
         Self { inner }
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
+    #[inline]
     pub fn get(&self, key: &str) -> f64 {
         self.inner.get(key).copied().unwrap_or(0.0)
     }
 
+    #[inline]
     pub fn iter(&self) -> impl Iterator<Item = (&String, &f64)> {
         self.inner.iter()
     }
 
+    #[inline]
     pub fn keys(&self) -> impl Iterator<Item = &String> {
         self.inner.keys()
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
+    #[inline]
     pub fn contains(&self, key: &str) -> bool {
         self.inner.contains_key(key)
     }

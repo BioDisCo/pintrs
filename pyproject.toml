@@ -46,9 +46,11 @@ select = [
 ignore = ["S101"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*.py" = ["PLR2004", "PLC0415", "PT011", "S301", "E402", "TC002", "RUF012", "N802", "ARG005"]
+"tests/*.py" = ["PLR2004", "PLC0415", "PT011", "PT012", "S301", "E402", "TC002", "RUF012", "N802", "ARG002", "ARG005", "B017", "F841", "SIM105", "SIM117", "SIM202", "PLR0124", "PLR0913"]
 "python/pintrs/__init__.pyi" = ["N802", "E501"]
 "python/pintrs/pandas_support.py" = ["RUF012"]
+"python/pintrs/numpy_support.py" = ["E501", "PLR2004", "PLR0911", "PLR0912", "PLR0915", "ARG002"]
+"python/pintrs/formatting.py" = ["PLR2004"]
 
 [tool.mypy]
 strict = true
@@ -68,4 +70,4 @@ addopts = "-ra -q --strict-markers --strict-config"
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 venvPath = "."
-venv = ".venv"
+venv = "venv"

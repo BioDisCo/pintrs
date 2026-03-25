@@ -239,7 +239,7 @@ def print_comparison(
 def numpy_benchmarks() -> None:
     """Run numpy array quantity benchmarks."""
     try:
-        import importlib.util  # noqa: PLC0415
+        import importlib.util
 
         if importlib.util.find_spec("numpy") is None:
             raise ImportError
@@ -280,7 +280,7 @@ def main() -> None:
     has_pint = False
     pint_results: dict[str, float] = {}
     try:
-        import pint  # noqa: PLC0415, F401
+        import pint  # noqa: F401
 
         has_pint = True
     except ImportError:

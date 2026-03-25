@@ -380,7 +380,7 @@ class TestComparisonEdgeCases:
 
     def test_nan_not_equal_to_self(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(float("nan"), "meter")
-        assert q != q  # noqa: PLR0124
+        assert q != q
 
     def test_dimensionless_eq_scalar_via_float(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3, "meter") / ureg.Quantity(1, "meter")

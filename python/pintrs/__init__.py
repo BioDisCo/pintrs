@@ -169,6 +169,231 @@ def check(
     return decorator
 
 
+# --- GenericQuantity (for Decimal, Fraction, and other non-float magnitudes) ---
+
+
+class GenericQuantity:
+    """A Quantity whose magnitude is a non-float type (Decimal, Fraction, etc.).
+
+    Uses Rust-backed Unit for unit tracking, but keeps magnitude in Python
+    to preserve the original type.
+    """
+
+    def __init__(
+        self,
+        magnitude: Any,
+        units: str,
+        registry: UnitRegistry | None = None,
+    ) -> None:
+        self._magnitude = magnitude
+        self._units_str = units
+        self._registry: UnitRegistry = registry or UnitRegistry()
+        self._unit_obj: Unit = self._registry.Unit(units)
+
+    @property
+    def magnitude(self) -> Any:
+        return self._magnitude
+
+    @property
+    def m(self) -> Any:
+        return self._magnitude
+
+    @property
+    def units(self) -> Unit:
+        return self._unit_obj
+
+    @property
+    def u(self) -> Unit:
+        return self._unit_obj
+
+    @property
+    def dimensionality(self) -> str:
+        return str(self._unit_obj.dimensionality)
+
+    @property
+    def dimensionless(self) -> bool:
+        return bool(self._unit_obj.dimensionless)
+
+    def to(self, units: str) -> GenericQuantity:
+        factor = self._registry._get_conversion_factor(self._units_str, units)
+        mag_type = type(self._magnitude)
+        new_mag = self._magnitude * mag_type(str(factor))
+        return GenericQuantity(new_mag, units, self._registry)
+
+    def to_base_units(self) -> GenericQuantity:
+        factor, unit_str = self._registry._get_root_units(self._units_str)
+        mag_type = type(self._magnitude)
+        new_mag = self._magnitude * mag_type(str(factor))
+        return GenericQuantity(new_mag, unit_str, self._registry)
+
+    def to_root_units(self) -> GenericQuantity:
+        return self.to_base_units()
+
+    def is_compatible_with(self, other: str | GenericQuantity | Quantity) -> bool:
+        scalar = self._registry._scalar_quantity(1.0, self._units_str)
+        if isinstance(other, str):
+            return bool(scalar.is_compatible_with(other))
+        if isinstance(other, GenericQuantity):
+            return bool(scalar.is_compatible_with(other._units_str))
+        return bool(scalar.is_compatible_with(other))
+
+    def __add__(self, other: Any) -> GenericQuantity:
+        if isinstance(other, GenericQuantity):
+            if other._units_str != self._units_str:
+                other = other.to(self._units_str)
+            return GenericQuantity(
+                self._magnitude + other._magnitude,
+                self._units_str,
+                self._registry,
+            )
+        return GenericQuantity(
+            self._magnitude + other,
+            self._units_str,
+            self._registry,
+        )
+
+    def __radd__(self, other: Any) -> GenericQuantity:
+        return self.__add__(other)
+
+    def __sub__(self, other: Any) -> GenericQuantity:
+        if isinstance(other, GenericQuantity):
+            if other._units_str != self._units_str:
+                other = other.to(self._units_str)
+            return GenericQuantity(
+                self._magnitude - other._magnitude,
+                self._units_str,
+                self._registry,
+            )
+        return GenericQuantity(
+            self._magnitude - other,
+            self._units_str,
+            self._registry,
+        )
+
+    def __rsub__(self, other: Any) -> GenericQuantity:
+        result = self.__sub__(other)
+        return GenericQuantity(
+            -result._magnitude,
+            result._units_str,
+            result._registry,
+        )
+
+    def __mul__(self, other: Any) -> GenericQuantity:
+        if isinstance(other, GenericQuantity):
+            new_units = str(self._unit_obj * other._unit_obj)
+            return GenericQuantity(
+                self._magnitude * other._magnitude,
+                new_units,
+                self._registry,
+            )
+        return GenericQuantity(
+            self._magnitude * other,
+            self._units_str,
+            self._registry,
+        )
+
+    def __rmul__(self, other: Any) -> GenericQuantity:
+        return self.__mul__(other)
+
+    def __truediv__(self, other: Any) -> GenericQuantity:
+        if isinstance(other, GenericQuantity):
+            new_units = str(self._unit_obj / other._unit_obj)
+            return GenericQuantity(
+                self._magnitude / other._magnitude,
+                new_units,
+                self._registry,
+            )
+        return GenericQuantity(
+            self._magnitude / other,
+            self._units_str,
+            self._registry,
+        )
+
+    def __rtruediv__(self, other: Any) -> GenericQuantity:
+        inv_units = str(
+            self._registry.Unit("dimensionless") / self._unit_obj,
+        )
+        return GenericQuantity(
+            other / self._magnitude,
+            inv_units,
+            self._registry,
+        )
+
+    def __pow__(self, exp: Any) -> GenericQuantity:
+        new_units = str(self._unit_obj ** float(exp))
+        return GenericQuantity(
+            self._magnitude**exp,
+            new_units,
+            self._registry,
+        )
+
+    def __neg__(self) -> GenericQuantity:
+        return GenericQuantity(-self._magnitude, self._units_str, self._registry)
+
+    def __abs__(self) -> GenericQuantity:
+        return GenericQuantity(abs(self._magnitude), self._units_str, self._registry)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, GenericQuantity):
+            if other._units_str != self._units_str:
+                other = other.to(self._units_str)
+            return bool(self._magnitude == other._magnitude)
+        return False
+
+    def __lt__(self, other: Any) -> bool:
+        if isinstance(other, GenericQuantity):
+            if other._units_str != self._units_str:
+                other = other.to(self._units_str)
+            return bool(self._magnitude < other._magnitude)
+        return bool(self._magnitude < other)
+
+    def __le__(self, other: Any) -> bool:
+        return self == other or self < other
+
+    def __gt__(self, other: Any) -> bool:
+        if isinstance(other, GenericQuantity):
+            if other._units_str != self._units_str:
+                other = other.to(self._units_str)
+            return bool(self._magnitude > other._magnitude)
+        return bool(self._magnitude > other)
+
+    def __ge__(self, other: Any) -> bool:
+        return self == other or self > other
+
+    def __float__(self) -> float:
+        return float(self._magnitude)
+
+    def __int__(self) -> int:
+        return int(self._magnitude)
+
+    def __bool__(self) -> bool:
+        return bool(self._magnitude)
+
+    def __repr__(self) -> str:
+        return f"<Quantity({self._magnitude}, '{self._units_str}')>"
+
+    def __str__(self) -> str:
+        return f"{self._magnitude} {self._units_str}"
+
+    def __format__(self, spec: str) -> str:
+        if not spec:
+            return str(self)
+        # Delegate unit formatting to the Rust Unit
+        q = self._registry._scalar_quantity(float(self._magnitude), self._units_str)
+        return format(q, spec)
+
+    def __hash__(self) -> int:
+        return hash((self._magnitude, self._units_str))
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (GenericQuantity, (self._magnitude, self._units_str))
+
+    def check(self, dimension: str) -> bool:
+        return bool(
+            self._registry._scalar_quantity(1.0, self._units_str).check(dimension),
+        )
+
+
 # --- Measurement ---
 
 
@@ -231,18 +456,36 @@ class Measurement:
     def __str__(self) -> str:
         return f"{self._value.magnitude} +/- {self._error} {self._value.units}"
 
-    def __add__(self, other: Measurement) -> Measurement:
+    def __add__(self, other: Measurement | Quantity | float) -> Measurement:
         if isinstance(other, Measurement):
             new_val = self._value + other._value
             new_err = (self._error**2 + other._error**2) ** 0.5
             return Measurement(new_val, new_err)
+        if isinstance(other, Quantity):
+            return Measurement(self._value + other, self._error)
+        if isinstance(other, int | float):
+            return Measurement(self._value + other, self._error)
         return NotImplemented
 
-    def __sub__(self, other: Measurement) -> Measurement:
+    def __radd__(self, other: Quantity | float) -> Measurement:
+        return self.__add__(other)
+
+    def __sub__(self, other: Measurement | Quantity | float) -> Measurement:
         if isinstance(other, Measurement):
             new_val = self._value - other._value
             new_err = (self._error**2 + other._error**2) ** 0.5
             return Measurement(new_val, new_err)
+        if isinstance(other, Quantity):
+            return Measurement(self._value - other, self._error)
+        if isinstance(other, int | float):
+            return Measurement(self._value - other, self._error)
+        return NotImplemented
+
+    def __rsub__(self, other: Quantity | float) -> Measurement:
+        if isinstance(other, Quantity):
+            return Measurement(other - self._value, self._error)
+        if isinstance(other, int | float):
+            return Measurement(other - self._value, self._error)
         return NotImplemented
 
     def __mul__(self, other: Measurement | float) -> Measurement:
@@ -255,6 +498,9 @@ class Measurement:
             return Measurement(self._value * other, self._error * abs(other))
         return NotImplemented
 
+    def __rmul__(self, other: float) -> Measurement:
+        return self.__mul__(other)
+
     def __truediv__(self, other: Measurement | float) -> Measurement:
         if isinstance(other, Measurement):
             new_val = self._value / other._value
@@ -263,6 +509,13 @@ class Measurement:
             return Measurement(new_val, new_err)
         if isinstance(other, int | float):
             return Measurement(self._value / other, self._error / abs(other))
+        return NotImplemented
+
+    def __rtruediv__(self, other: float) -> Measurement:
+        if isinstance(other, int | float):
+            new_val = other / self._value
+            new_err = abs(new_val.magnitude) * self.rel
+            return Measurement(new_val, new_err)
         return NotImplemented
 
 
@@ -302,7 +555,7 @@ def _register_delta_units(ureg: UnitRegistry) -> None:
 def _is_array_like(value: Any) -> bool:
     """Check if value is a numpy array or array-like (not a scalar/string)."""
     try:
-        import numpy as np  # noqa: PLC0415
+        import numpy as np
 
         return isinstance(value, np.ndarray | list) and not isinstance(value, str)
     except ImportError:
@@ -361,7 +614,7 @@ def _ureg_setup_matplotlib(
     enable: bool = True,
 ) -> None:
     """Enable or disable matplotlib integration for pintrs Quantities."""
-    from pintrs.matplotlib_support import setup_matplotlib  # noqa: PLC0415
+    from pintrs.matplotlib_support import setup_matplotlib
 
     setup_matplotlib(enable)
 
@@ -492,7 +745,7 @@ def _ureg_parse_pattern(
     input_string: str,
 ) -> Any:
     """Stub for parse_pattern."""
-    import re  # noqa: PLC0415
+    import re
 
     return re.findall(pattern, input_string)
 
@@ -726,8 +979,26 @@ def _get_config(ureg: UnitRegistry) -> dict[str, Any]:
     if cfg is None:
         cfg = dict(_DEFAULT_CONFIG)
         cfg["preprocessors"] = []
+        init_kwargs = getattr(ureg, "_init_kwargs", None)
+        if init_kwargs is not None:
+            for k, v in init_kwargs.items():
+                if k in _CONFIG_KEYS:
+                    cfg[k] = v
         _registry_configs[key] = cfg
+        _update_special_flag(ureg, cfg)
     return cfg
+
+
+def _update_special_flag(ureg: UnitRegistry, cfg: dict[str, Any]) -> None:
+    """Update fast-path bypass flag when special Quantity config is active."""
+    has_special = (
+        bool(cfg.get("force_ndarray")) or cfg.get("non_int_type", float) is not float
+    )
+    key = id(ureg)
+    if has_special:
+        _special_qty_registries.add(key)
+    else:
+        _special_qty_registries.discard(key)
 
 
 def _make_config_property(name: str) -> property:
@@ -735,7 +1006,10 @@ def _make_config_property(name: str) -> property:
         return _get_config(self)[name]
 
     def setter(self: UnitRegistry, value: Any) -> None:
-        _get_config(self)[name] = value
+        cfg = _get_config(self)
+        cfg[name] = value
+        if name in ("force_ndarray", "non_int_type"):
+            _update_special_flag(self, cfg)
 
     return property(getter, setter)
 
@@ -750,6 +1024,91 @@ def _ureg_set_fmt_locale(self: UnitRegistry, locale: str | None) -> None:
 
 
 UnitRegistry.set_fmt_locale = _ureg_set_fmt_locale  # type: ignore[attr-defined]
+
+
+# --- Smart Quantity constructor (dispatches to ArrayQuantity for arrays) ---
+
+
+def _is_duck_array(value: Any) -> bool:
+    """Check if value is an array-like that should become ArrayQuantity."""
+    try:
+        import numpy as np
+
+        if isinstance(value, np.ndarray):
+            return True
+    except ImportError:
+        pass
+    if isinstance(value, list | tuple):
+        return True
+    return hasattr(value, "__array_function__") or hasattr(value, "__array_ufunc__")
+
+
+_special_qty_registries: set[int] = set()
+
+
+def _ureg_quantity(self: UnitRegistry, value: Any, units: Any = None) -> Any:  # noqa: PLR0911
+    """Create a Quantity, dispatching to ArrayQuantity for array-like inputs."""
+    # Fast path: float/int scalar (most common case) -> straight to Rust
+    vtype = type(value)
+    if (vtype is float or vtype is int) and id(self) not in _special_qty_registries:
+        return self._f64_quantity(
+            float(value),
+            str(units) if units is not None else None,
+        )
+
+    # Quantity(Quantity, new_units) -> convert (delegate to Rust)
+    if vtype is Quantity:
+        return self._scalar_quantity(value, str(units) if units is not None else None)
+
+    # String parsing -> delegate to Rust
+    if vtype is str:
+        return self._scalar_quantity(value, None)
+
+    from pintrs.numpy_support import ArrayQuantity as _ArrayQuantity
+
+    # Quantity(ArrayQuantity, new_units) -> convert
+    if isinstance(value, _ArrayQuantity):
+        if units is not None:
+            return value.to(str(units))
+        return value
+
+    # Quantity(Unit) -> Quantity(1, unit)
+    if isinstance(value, Unit):
+        return self._scalar_quantity(1.0, str(value))
+
+    # Array-like -> ArrayQuantity
+    if _is_duck_array(value):
+        try:
+            import numpy as np
+
+            units_str = str(units) if units is not None else "dimensionless"
+            arr = np.asarray(value) if not isinstance(value, np.ndarray) else value
+            return _ArrayQuantity(arr, units_str, self)
+        except (ImportError, TypeError, ValueError):
+            pass
+
+    # force_ndarray: wrap scalar in 0-d array
+    cfg = _get_config(self)
+    if cfg.get("force_ndarray"):
+        try:
+            import numpy as np
+
+            units_str = str(units) if units is not None else "dimensionless"
+            return _ArrayQuantity(np.asarray(value), units_str, self)
+        except (ImportError, TypeError, ValueError):
+            pass
+
+    # non_int_type: preserve Decimal/Fraction magnitudes
+    non_int = cfg.get("non_int_type", float)
+    if non_int is not float and isinstance(value, non_int):
+        units_str = str(units) if units is not None else "dimensionless"
+        return GenericQuantity(value, units_str, self)
+
+    # Scalar -> Rust Quantity
+    return self._scalar_quantity(value, str(units) if units is not None else None)
+
+
+UnitRegistry.Quantity = _ureg_quantity  # type: ignore[attr-defined]
 
 # --- Class references on UnitRegistry ---
 
@@ -832,7 +1191,7 @@ def _q_dtype(self: Any) -> Any:
     if hasattr(m, "dtype"):
         return m.dtype
     try:
-        import numpy as np  # noqa: PLC0415
+        import numpy as np
 
         return np.dtype(type(m))
     except ImportError:
@@ -869,6 +1228,7 @@ Quantity.imag = property(_q_imag)  # type: ignore[attr-defined,assignment]
 Quantity.T = property(_q_transpose)  # type: ignore[attr-defined,assignment]
 Quantity.force_ndarray = False  # type: ignore[attr-defined]
 Quantity.force_ndarray_like = False  # type: ignore[attr-defined]
+Quantity.__array_priority__ = 21  # type: ignore[attr-defined]  # higher than ndarray (0)
 
 
 def _q_clip(self: Any, min: Any = None, max: Any = None) -> Any:  # noqa: A002
@@ -959,7 +1319,7 @@ def _q_tolist(self: Any) -> Any:
 def _q_from_list(_cls: Any, lst: list[Any], units: str | None = None) -> Any:
     """Create a Quantity from a list of Quantities."""
     try:
-        import numpy as np  # noqa: PLC0415
+        import numpy as np
     except ImportError as e:
         msg = "from_list requires numpy"
         raise ImportError(msg) from e
@@ -1057,7 +1417,7 @@ def _quantity_format_babel(self: Any, locale: str = "en") -> str:
         Locale-formatted string like "1.000,5 Meter" (de_DE).
     """
     try:
-        from babel.numbers import format_decimal  # noqa: PLC0415
+        from babel.numbers import format_decimal
     except ImportError:
         return str(self)
     mag_str = format_decimal(self.magnitude, locale=locale)
@@ -1099,3 +1459,144 @@ def _unit_format(self: Any, spec: str) -> str:
 
 Quantity.__format__ = _quantity_format  # type: ignore[attr-defined,assignment]
 Unit.__format__ = _unit_format  # type: ignore[attr-defined,assignment]
+
+
+def _unit_systems(self: Unit) -> frozenset[str]:
+    """Return the set of system names this unit belongs to."""
+    from pintrs.system import System
+
+    # Use canonical names from the units dict
+    unit_names = {name for name, _ in self._units_dict()}
+    result: set[str] = set()
+    for sys_name, system in System._REGISTRY.items():
+        if unit_names & set(system.rules.values()):
+            result.add(sys_name)
+    return frozenset(result)
+
+
+Unit.systems = property(_unit_systems)  # type: ignore[attr-defined,assignment]
+
+# --- Wrap Quantity arithmetic to handle array operands ---
+# Fast scalar types that should go straight to Rust
+_SCALAR_TYPES = (int, float, Quantity)
+
+_original_q_mul = Quantity.__mul__
+_original_q_rmul = Quantity.__rmul__
+_original_q_add = Quantity.__add__
+_original_q_radd = Quantity.__radd__
+_original_q_sub = Quantity.__sub__
+_original_q_rsub = Quantity.__rsub__
+_original_q_truediv = Quantity.__truediv__
+_original_q_rtruediv = Quantity.__rtruediv__
+
+# Cache numpy at module level
+try:
+    import numpy as _np_cached
+except ImportError:
+    _np_cached = None  # type: ignore[assignment]
+
+
+def _to_arr(other: Any) -> Any:
+    """Convert array-like to ndarray. Returns None if not array-like."""
+    if _np_cached is not None and isinstance(other, _np_cached.ndarray):
+        return other
+    if isinstance(other, list | tuple):
+        return _np_cached.asarray(other) if _np_cached is not None else None
+    if hasattr(other, "__array_function__"):
+        return _np_cached.asarray(other) if _np_cached is not None else None
+    return None
+
+
+def _q_array_mul(self: Any, other: Any) -> Any:
+    if type(other) in _SCALAR_TYPES:
+        return _original_q_mul(self, other)
+    arr = _to_arr(other)
+    if arr is not None:
+        return ArrayQuantity(arr * self.magnitude, str(self.units), self._registry)
+    return _original_q_mul(self, other)
+
+
+def _q_array_rmul(self: Any, other: Any) -> Any:
+    if type(other) in _SCALAR_TYPES:
+        return _original_q_rmul(self, other)
+    arr = _to_arr(other)
+    if arr is not None:
+        return ArrayQuantity(arr * self.magnitude, str(self.units), self._registry)
+    return _original_q_rmul(self, other)
+
+
+def _q_array_add(self: Any, other: Any) -> Any:
+    if type(other) in _SCALAR_TYPES:
+        return _original_q_add(self, other)
+    arr = _to_arr(other)
+    if arr is not None:
+        return ArrayQuantity(arr + self.magnitude, str(self.units), self._registry)
+    return _original_q_add(self, other)
+
+
+def _q_array_radd(self: Any, other: Any) -> Any:
+    if type(other) in _SCALAR_TYPES:
+        return _original_q_radd(self, other)
+    arr = _to_arr(other)
+    if arr is not None:
+        return ArrayQuantity(arr + self.magnitude, str(self.units), self._registry)
+    return _original_q_radd(self, other)
+
+
+def _q_array_sub(self: Any, other: Any) -> Any:
+    if type(other) in _SCALAR_TYPES:
+        return _original_q_sub(self, other)
+    arr = _to_arr(other)
+    if arr is not None:
+        return ArrayQuantity(
+            self.magnitude - arr,
+            str(self.units),
+            self._registry,
+        )
+    return _original_q_sub(self, other)
+
+
+def _q_array_rsub(self: Any, other: Any) -> Any:
+    if type(other) in _SCALAR_TYPES:
+        return _original_q_rsub(self, other)
+    arr = _to_arr(other)
+    if arr is not None:
+        return ArrayQuantity(
+            arr - self.magnitude,
+            str(self.units),
+            self._registry,
+        )
+    return _original_q_rsub(self, other)
+
+
+def _q_array_truediv(self: Any, other: Any) -> Any:
+    if type(other) in _SCALAR_TYPES:
+        return _original_q_truediv(self, other)
+    arr = _to_arr(other)
+    if arr is not None:
+        return ArrayQuantity(
+            self.magnitude / arr,
+            str(self.units),
+            self._registry,
+        )
+    return _original_q_truediv(self, other)
+
+
+def _q_array_rtruediv(self: Any, other: Any) -> Any:
+    if type(other) in _SCALAR_TYPES:
+        return _original_q_rtruediv(self, other)
+    arr = _to_arr(other)
+    if arr is not None:
+        inv_units = str(self._registry.Unit("dimensionless") / self.units)
+        return ArrayQuantity(arr / self.magnitude, inv_units, self._registry)
+    return _original_q_rtruediv(self, other)
+
+
+Quantity.__mul__ = _q_array_mul  # type: ignore[attr-defined,assignment]
+Quantity.__rmul__ = _q_array_rmul  # type: ignore[attr-defined,assignment]
+Quantity.__add__ = _q_array_add  # type: ignore[attr-defined,assignment]
+Quantity.__radd__ = _q_array_radd  # type: ignore[attr-defined,assignment]
+Quantity.__sub__ = _q_array_sub  # type: ignore[attr-defined,assignment]
+Quantity.__rsub__ = _q_array_rsub  # type: ignore[attr-defined,assignment]
+Quantity.__truediv__ = _q_array_truediv  # type: ignore[attr-defined,assignment]
+Quantity.__rtruediv__ = _q_array_rtruediv  # type: ignore[attr-defined,assignment]

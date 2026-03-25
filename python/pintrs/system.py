@@ -127,7 +127,7 @@ class System:
         if isinstance(lines, str):
             sys = cls(lines)
             if units:
-                from pintrs._core import UnitRegistry  # noqa: PLC0415
+                from pintrs._core import UnitRegistry
 
                 ureg = UnitRegistry()
                 for unit in units:

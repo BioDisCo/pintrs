@@ -483,7 +483,8 @@ class TestUnitConversion:
 
     def test_systems_property(self, ureg: UnitRegistry) -> None:
         u = ureg.Unit("meter")
-        assert isinstance(u.systems, list)
+        assert isinstance(u.systems, frozenset)
+        assert "mks" in u.systems
 
 
 # ---------------------------------------------------------------------------

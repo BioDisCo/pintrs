@@ -30,7 +30,10 @@ def _parse_format_spec(spec: str) -> tuple[str, str, bool]:
     use_abbrev = "~" in spec
     clean = spec.replace("~", "")
 
-    if clean and clean[-1] in "PLHCD":
+    if clean.endswith("Lx"):
+        unit_mode = "Lx"
+        mag_fmt = clean[:-2]
+    elif clean and clean[-1] in "PLHCD":
         unit_mode = clean[-1]
         mag_fmt = clean[:-1]
     else:
@@ -150,6 +153,134 @@ def _format_components(
     return div_char.join([separator.join(pos_parts), *neg_parts])
 
 
+_SIUNITX_NAMES: dict[str, str] = {
+    "m": "meter",
+    "meter": "meter",
+    "s": "second",
+    "second": "second",
+    "kg": "kilogram",
+    "kilogram": "kilogram",
+    "g": "gram",
+    "gram": "gram",
+    "A": "ampere",
+    "ampere": "ampere",
+    "K": "kelvin",
+    "kelvin": "kelvin",
+    "mol": "mole",
+    "mole": "mole",
+    "cd": "candela",
+    "candela": "candela",
+    "Hz": "hertz",
+    "hertz": "hertz",
+    "N": "newton",
+    "newton": "newton",
+    "Pa": "pascal",
+    "pascal": "pascal",
+    "J": "joule",
+    "joule": "joule",
+    "W": "watt",
+    "watt": "watt",
+    "C": "coulomb",
+    "coulomb": "coulomb",
+    "V": "volt",
+    "volt": "volt",
+    "F": "farad",
+    "farad": "farad",
+    "Ω": "ohm",
+    "ohm": "ohm",
+    "S": "siemens",
+    "siemens": "siemens",
+    "Wb": "weber",
+    "weber": "weber",
+    "T": "tesla",
+    "tesla": "tesla",
+    "H": "henry",
+    "henry": "henry",
+    "lm": "lumen",
+    "lumen": "lumen",
+    "lx": "lux",
+    "lux": "lux",
+    "Bq": "becquerel",
+    "becquerel": "becquerel",
+    "Gy": "gray",
+    "gray": "gray",
+    "Sv": "sievert",
+    "sievert": "sievert",
+    "L": "liter",
+    "liter": "liter",
+    "min": "minute",
+    "minute": "minute",
+    "h": "hour",
+    "hour": "hour",
+    "d": "day",
+    "day": "day",
+    "rad": "radian",
+    "radian": "radian",
+    "sr": "steradian",
+    "steradian": "steradian",
+}
+
+
+_SI_PREFIXES: dict[str, str] = {
+    "yocto": "yocto",
+    "zepto": "zepto",
+    "atto": "atto",
+    "femto": "femto",
+    "pico": "pico",
+    "nano": "nano",
+    "micro": "micro",
+    "milli": "milli",
+    "centi": "centi",
+    "deci": "deci",
+    "deca": "deca",
+    "hecto": "hecto",
+    "kilo": "kilo",
+    "mega": "mega",
+    "giga": "giga",
+    "tera": "tera",
+    "peta": "peta",
+    "exa": "exa",
+    "zetta": "zetta",
+    "yotta": "yotta",
+}
+
+
+def _split_si_prefix(name: str) -> list[str]:
+    """Split a unit name into prefix + base for siunitx."""
+    for prefix in sorted(_SI_PREFIXES, key=len, reverse=True):
+        if name.startswith(prefix) and name != prefix:
+            base = name[len(prefix) :]
+            if base in _SIUNITX_NAMES:
+                return [rf"\{prefix}", rf"\{base}"]
+    return [rf"\{name}"]
+
+
+def _format_siunitx(components: list[tuple[str, float]]) -> str:
+    """Format unit components in siunitx LaTeX style."""
+    parts: list[str] = []
+    for name, exp in sorted(components, key=lambda x: (-x[1], x[0])):
+        si_name = _SIUNITX_NAMES.get(name, name)
+        cmd_parts = _split_si_prefix(si_name)
+        cmd = "".join(cmd_parts)
+        if abs(exp - 1.0) < 1e-9:
+            parts.append(cmd)
+        elif abs(exp - (-1.0)) < 1e-9:
+            parts.append(r"\per" + cmd)
+        elif abs(exp - 2.0) < 1e-9:
+            parts.append(cmd + r"\squared")
+        elif abs(exp - 3.0) < 1e-9:
+            parts.append(cmd + r"\cubed")
+        elif abs(exp - (-2.0)) < 1e-9:
+            parts.append(r"\per" + cmd + r"\squared")
+        elif abs(exp - (-3.0)) < 1e-9:
+            parts.append(r"\per" + cmd + r"\cubed")
+        elif exp > 0:
+            parts.append(cmd + rf"\tothe{{{exp}}}")
+        else:
+            parts.append(r"\per" + cmd + rf"\tothe{{{abs(exp)}}}")
+    return "".join(parts)
+
+
 def format_unit(unit: Unit, spec: str = "") -> str:
     """Format a Unit with pint-compatible format specifiers.
 
@@ -176,6 +307,8 @@ def format_unit(unit: Unit, spec: str = "") -> str:
             separator=" ",
             div_char="/",
         )
+    if unit_mode == "Lx":
+        return _format_siunitx(components)
     # D or C
     return _format_components(components)
 
@@ -203,5 +336,8 @@ def format_quantity(quantity: Quantity, spec: str = "") -> str:
 
     unit_spec = ("~" if use_abbrev else "") + unit_mode
     unit_str = format_unit(q.units, unit_spec)
+
+    if unit_mode == "Lx":
+        return rf"\SI[]{{{mag_str}}}{{{unit_str}}}"
 
     return f"{mag_str} {unit_str}"

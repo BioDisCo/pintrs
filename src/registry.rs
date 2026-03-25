@@ -5,6 +5,8 @@ use crate::errors::*;
 use crate::parser;
 use crate::units_container::UnitsContainer;
 
+const UNIT_CACHE_MAX: usize = 512;
+
 /// Internal representation of a unit in the registry.
 #[derive(Debug, Clone)]
 pub struct UnitEntry {
@@ -44,6 +46,12 @@ pub struct UnitRegistry {
     dimensions: HashMap<String, Option<String>>,
     /// Whether the registry is case sensitive
     pub case_sensitive: bool,
+    /// Cache for parsed unit expressions
+    unit_expr_cache: HashMap<String, UnitsContainer>,
+    /// Cache for unit info: name -> (factor, root_units, dimensionality)
+    unit_info_cache: HashMap<String, (f64, UnitsContainer, UnitsContainer)>,
+    /// Pre-sorted prefix strings (longest first) for fast prefix stripping
+    sorted_prefixes: Vec<(String, f64)>,
 }
 
 impl UnitRegistry {
@@ -56,6 +64,9 @@ impl UnitRegistry {
             raw_unit_defs: Vec::new(),
             dimensions: HashMap::new(),
             case_sensitive: true,
+            unit_expr_cache: HashMap::new(),
+            unit_info_cache: HashMap::new(),
+            sorted_prefixes: Vec::new(),
         };
 
         // Load embedded default definitions
@@ -83,6 +94,9 @@ impl UnitRegistry {
                 reg.add_prefix(p);
             }
         }
+
+        // Build sorted prefix list for fast prefix stripping
+        reg.rebuild_sorted_prefixes();
 
         // Collect unit definitions for multi-pass resolution
         let mut unit_defs = Vec::new();
@@ -396,43 +410,41 @@ impl UnitRegistry {
         }))
     }
 
-    /// Try to strip a prefix from a unit name.
-    /// Returns (prefix_factor, canonical_base_unit_name) or None.
-    fn try_strip_prefix(&self, name: &str) -> Option<(f64, String)> {
-        // Try each prefix (longest match first for correctness)
-        let mut candidates: Vec<(&str, &PrefixEntry)> = Vec::new();
-        for (prefix_name, entry) in &self.prefixes {
-            if !prefix_name.is_empty() && name.starts_with(prefix_name.as_str()) {
-                candidates.push((prefix_name.as_str(), entry));
+    fn rebuild_sorted_prefixes(&mut self) {
+        let mut sp: Vec<(String, f64)> = Vec::new();
+        for (name, entry) in &self.prefixes {
+            if !name.is_empty() {
+                sp.push((name.clone(), entry.factor));
             }
             if let Some(sym) = &entry.symbol {
-                if !sym.is_empty() && name.starts_with(sym.as_str()) {
-                    candidates.push((sym.as_str(), entry));
+                if !sym.is_empty() {
+                    sp.push((sym.clone(), entry.factor));
                 }
             }
             for alias in &entry.aliases {
-                if !alias.is_empty() && name.starts_with(alias.as_str()) {
-                    candidates.push((alias.as_str(), entry));
+                if !alias.is_empty() {
+                    sp.push((alias.clone(), entry.factor));
                 }
             }
         }
+        sp.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        self.sorted_prefixes = sp;
+    }
 
-        // Sort by prefix length descending (longest prefix first)
-        candidates.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-
-        for (prefix_str, prefix_entry) in candidates {
-            let remainder = &name[prefix_str.len()..];
-            if remainder.is_empty() {
-                continue;
-            }
-            // Check if remainder maps to a known unit
-            if let Some(canonical) = self.name_map.get(remainder) {
-                if self.units.contains_key(canonical) {
-                    return Some((prefix_entry.factor, canonical.clone()));
+    /// Try to strip a prefix from a unit name.
+    /// Returns (prefix_factor, canonical_base_unit_name) or None.
+    #[inline]
+    fn try_strip_prefix(&self, name: &str) -> Option<(f64, String)> {
+        for (prefix_str, factor) in &self.sorted_prefixes {
+            if name.len() > prefix_str.len() && name.starts_with(prefix_str.as_str()) {
+                let remainder = &name[prefix_str.len()..];
+                if let Some(canonical) = self.name_map.get(remainder) {
+                    if self.units.contains_key(canonical) {
+                        return Some((*factor, canonical.clone()));
+                    }
                 }
             }
         }
-
         None
     }
 
@@ -461,14 +473,24 @@ impl UnitRegistry {
     }
 
     /// Parse a unit expression string like "kg*m/s^2" into a UnitsContainer (canonical names).
-    pub fn parse_unit_expr(&self, expr: &str) -> PintResult<UnitsContainer> {
+    pub fn parse_unit_expr(&mut self, expr: &str) -> PintResult<UnitsContainer> {
         let expr = expr.trim();
         if expr.is_empty() || expr == "dimensionless" {
             return Ok(UnitsContainer::new());
         }
 
+        if let Some(cached) = self.unit_expr_cache.get(expr) {
+            return Ok(cached.clone());
+        }
+
         let tokens = tokenize_relation(expr);
-        self.eval_unit_expr_tokens(&tokens)
+        let result = self.eval_unit_expr_tokens(&tokens)?;
+
+        if self.unit_expr_cache.len() < UNIT_CACHE_MAX {
+            self.unit_expr_cache.insert(expr.to_string(), result.clone());
+        }
+
+        Ok(result)
     }
 
     /// Evaluate unit expression tokens into a UnitsContainer
@@ -568,7 +590,7 @@ impl UnitRegistry {
     }
 
     /// Get the dimensionality of a units container
-    pub fn get_dimensionality(&self, units: &UnitsContainer) -> PintResult<UnitsContainer> {
+    pub fn get_dimensionality(&mut self, units: &UnitsContainer) -> PintResult<UnitsContainer> {
         let mut result = UnitsContainer::new();
         for (unit_name, &exp) in units.iter() {
             let dim = self.get_unit_dimensionality(unit_name)?;
@@ -577,30 +599,25 @@ impl UnitRegistry {
         Ok(result)
     }
 
-    fn get_unit_dimensionality(&self, name: &str) -> PintResult<UnitsContainer> {
-        // Direct lookup
-        if let Some(canonical) = self.name_map.get(name) {
-            if let Some(entry) = self.units.get(canonical) {
-                return Ok(entry.dimensionality.clone());
-            }
+    fn ensure_unit_info_cached(&mut self, name: &str) -> PintResult<()> {
+        if self.unit_info_cache.contains_key(name) {
+            return Ok(());
         }
+        let info = self.resolve_unit_ref(name)?;
+        self.unit_info_cache.insert(name.to_string(), info);
+        Ok(())
+    }
 
-        // Try prefixed
-        if let Some((_, base_canonical)) = self.try_strip_prefix(name) {
-            if let Some(entry) = self.units.get(&base_canonical) {
-                return Ok(entry.dimensionality.clone());
-            }
-        }
-
-        Err(Box::new(PintError::UndefinedUnitError {
-            unit_name: name.to_string(),
-        }))
+    #[inline]
+    fn get_unit_dimensionality(&mut self, name: &str) -> PintResult<UnitsContainer> {
+        self.ensure_unit_info_cached(name)?;
+        Ok(self.unit_info_cache.get(name).unwrap().2.clone())
     }
 
     /// Get the conversion factor between two unit containers.
     /// If they have different dimensionality, returns an error.
     pub fn get_conversion_factor(
-        &self,
+        &mut self,
         src: &UnitsContainer,
         dst: &UnitsContainer,
     ) -> PintResult<f64> {
@@ -624,7 +641,7 @@ impl UnitRegistry {
     }
 
     /// Get the total conversion factor from a UnitsContainer to root units
-    fn get_root_factor(&self, units: &UnitsContainer) -> PintResult<f64> {
+    fn get_root_factor(&mut self, units: &UnitsContainer) -> PintResult<f64> {
         let mut factor = 1.0_f64;
         for (unit_name, &exp) in units.iter() {
             let uf = self.get_unit_factor(unit_name)?;
@@ -633,28 +650,19 @@ impl UnitRegistry {
         Ok(factor)
     }
 
-    fn get_unit_factor(&self, name: &str) -> PintResult<f64> {
-        // Direct lookup
-        if let Some(canonical) = self.name_map.get(name) {
-            if let Some(entry) = self.units.get(canonical) {
-                return Ok(entry.factor);
-            }
+    #[inline]
+    fn get_unit_factor(&mut self, name: &str) -> PintResult<f64> {
+        self.ensure_unit_info_cached(name)?;
+        if let Some(info) = self.unit_info_cache.get(name) {
+            return Ok(info.0);
         }
-
-        // Try prefixed
-        if let Some((prefix_factor, base_canonical)) = self.try_strip_prefix(name) {
-            if let Some(entry) = self.units.get(&base_canonical) {
-                return Ok(prefix_factor * entry.factor);
-            }
-        }
-
         Err(Box::new(PintError::UndefinedUnitError {
             unit_name: name.to_string(),
         }))
     }
 
     /// Get the root units (base units) for a UnitsContainer
-    pub fn get_root_units(&self, units: &UnitsContainer) -> PintResult<(f64, UnitsContainer)> {
+    pub fn get_root_units(&mut self, units: &UnitsContainer) -> PintResult<(f64, UnitsContainer)> {
         let mut factor = 1.0_f64;
         let mut result = UnitsContainer::new();
         for (unit_name, &exp) in units.iter() {
@@ -665,25 +673,19 @@ impl UnitRegistry {
         Ok((factor, result))
     }
 
-    fn get_unit_root_units(&self, name: &str) -> PintResult<(f64, UnitsContainer)> {
-        if let Some(canonical) = self.name_map.get(name) {
-            if let Some(entry) = self.units.get(canonical) {
-                return Ok((entry.factor, entry.root_units.clone()));
-            }
+    #[inline]
+    fn get_unit_root_units(&mut self, name: &str) -> PintResult<(f64, UnitsContainer)> {
+        self.ensure_unit_info_cached(name)?;
+        if let Some(info) = self.unit_info_cache.get(name) {
+            return Ok((info.0, info.1.clone()));
         }
-
-        if let Some((prefix_factor, base_canonical)) = self.try_strip_prefix(name) {
-            if let Some(entry) = self.units.get(&base_canonical) {
-                return Ok((prefix_factor * entry.factor, entry.root_units.clone()));
-            }
-        }
-
         Err(Box::new(PintError::UndefinedUnitError {
             unit_name: name.to_string(),
         }))
     }
 
     /// Get the offset for a unit
+    #[inline]
     pub fn get_unit_offset(&self, name: &str) -> f64 {
         if let Some(canonical) = self.name_map.get(name) {
             if let Some(entry) = self.units.get(canonical) {
@@ -694,13 +696,14 @@ impl UnitRegistry {
     }
 
     /// Check if a unit has a non-zero offset (non-multiplicative)
+    #[inline]
     pub fn is_offset_unit(&self, name: &str) -> bool {
         self.get_unit_offset(name) != 0.0
     }
 
     /// Convert a value from src units to dst units
     pub fn convert(
-        &self,
+        &mut self,
         value: f64,
         src: &UnitsContainer,
         dst: &UnitsContainer,
@@ -717,6 +720,7 @@ impl UnitRegistry {
         Ok(value * factor)
     }
 
+    #[inline]
     fn has_offset_units(&self, units: &UnitsContainer) -> bool {
         for (name, _) in units.iter() {
             if self.is_offset_unit(name) {
@@ -727,7 +731,7 @@ impl UnitRegistry {
     }
 
     fn convert_with_offset(
-        &self,
+        &mut self,
         value: f64,
         src: &UnitsContainer,
         dst: &UnitsContainer,
@@ -775,6 +779,7 @@ impl UnitRegistry {
     }
 
     /// Check if a unit name is known to the registry
+    #[inline]
     pub fn is_known_unit(&self, name: &str) -> bool {
         if self.name_map.contains_key(name) {
             return true;

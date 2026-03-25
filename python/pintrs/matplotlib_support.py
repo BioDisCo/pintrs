@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 try:
-    import matplotlib.units as munits  # type: ignore[import-not-found]
+    import matplotlib.units as munits  # type: ignore[import-not-found,unused-ignore]
 
     has_matplotlib = True
 except ImportError:
@@ -20,7 +20,7 @@ except ImportError:
 
 if has_matplotlib:
 
-    class PintConverter(munits.ConversionInterface):  # type: ignore[misc]
+    class PintConverter(munits.ConversionInterface):  # type: ignore[misc,unused-ignore]
         """Matplotlib converter for pintrs Quantity objects."""
 
         @staticmethod
@@ -36,7 +36,7 @@ if has_matplotlib:
         def axisinfo(unit: Any, axis: Any) -> munits.AxisInfo | None:  # noqa: ARG004
             """Return axis label from unit."""
             if unit is not None:
-                return munits.AxisInfo(label=str(unit))
+                return munits.AxisInfo(label=str(unit))  # type: ignore[no-untyped-call]
             return None
 
         @staticmethod
@@ -60,7 +60,7 @@ def setup_matplotlib(enable: bool = True) -> None:
     if not has_matplotlib:
         return
 
-    from pintrs._core import Quantity as _Quantity  # noqa: PLC0415
+    from pintrs._core import Quantity as _Quantity
 
     if enable:
         munits.registry[_Quantity] = PintConverter()  # type: ignore[index,assignment,unused-ignore]

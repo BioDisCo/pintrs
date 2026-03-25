@@ -142,7 +142,11 @@ class TestUnitMethods:
 
     def test_systems(self, ureg: UnitRegistry) -> None:
         u = ureg.Unit("meter")
-        assert isinstance(u.systems, list)
+        assert isinstance(u.systems, frozenset)
+        assert "mks" in u.systems
+        assert "SI" in u.systems
+        ft = ureg.Unit("foot")
+        assert "imperial" in ft.systems
 
     def test_compare(self, ureg: UnitRegistry) -> None:
         u = ureg.Unit("meter")

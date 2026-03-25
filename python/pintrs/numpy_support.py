@@ -509,8 +509,19 @@ if has_numpy:
                 return np.asarray(self._magnitude, dtype=dtype)
             return np.asarray(self._magnitude)
 
+        # Ufuncs that require dimensionless input
+        _DIMENSIONLESS_UFUNCS: frozenset[np.ufunc] = frozenset()
+        # Trig ufuncs that accept radians/degrees/dimensionless
+        _TRIG_UFUNCS: frozenset[np.ufunc] = frozenset()
+        # Inverse trig ufuncs that return radians
+        _INVERSE_TRIG_UFUNCS: frozenset[np.ufunc] = frozenset()
+        # arctan2: two args with matching units, returns radians
+        _ARCTAN2_UFUNCS: frozenset[np.ufunc] = frozenset()
+        # Ufuncs that require matching dimensions for two inputs
+        _MATCHING_DIMS_UFUNCS: frozenset[np.ufunc] = frozenset()
+
         @staticmethod
-        def _ufunc_output_units(  # noqa: PLR0911
+        def _ufunc_output_units(
             ufunc: np.ufunc,
             input_units: list[Unit | None],
             processed: list[NDArray[Any] | float],
@@ -548,6 +559,89 @@ if has_numpy:
                 return str(u0 ** power_map[ufunc]) if u0 is not None else default_units
             return default_units
 
+        def _check_additive_compat(
+            self,
+            ufunc: np.ufunc,
+            inputs: tuple[Any, ...],
+            processed: list[NDArray[Any] | float],
+            input_units: list[Unit | None],
+        ) -> list[NDArray[Any] | float]:
+            """Check dimensionality and convert units for add/subtract."""
+            from pintrs import DimensionalityError
+
+            if ufunc not in self._MATCHING_DIMS_UFUNCS:
+                return processed
+            units_with_idx = [
+                (i, u) for i, u in enumerate(input_units) if u is not None
+            ]
+            if len(units_with_idx) < 2:
+                return processed
+            _, base_unit = units_with_idx[0]
+            result = list(processed)
+            for idx, unit in units_with_idx[1:]:
+                if str(unit.dimensionality) != str(base_unit.dimensionality):
+                    msg = f"Cannot convert from '{unit}' to '{base_unit}'"
+                    raise DimensionalityError(msg)
+                if str(unit) != str(base_unit):
+                    inp = inputs[idx]
+                    if isinstance(inp, ArrayQuantity):
+                        converted = inp.to(str(base_unit))
+                        result[idx] = converted._magnitude
+                    elif isinstance(inp, ScalarQuantity):
+                        converted_q = inp.to(str(base_unit))
+                        result[idx] = converted_q.magnitude
+            return result
+
+        def _check_trig_units(
+            self,
+            ufunc: np.ufunc,
+            inputs: tuple[Any, ...],
+            processed: list[NDArray[Any] | float],
+            input_units: list[Unit | None],
+        ) -> list[NDArray[Any] | float]:
+            """Validate and convert units for trig/exp/log ufuncs."""
+            from pintrs import DimensionalityError
+
+            if ufunc in self._TRIG_UFUNCS:
+                u = input_units[0] if input_units else None
+                if u is not None:
+                    u_str = str(u)
+                    if u_str in ("rad", "radian"):
+                        return processed
+                    if u_str in ("deg", "degree"):
+                        result = list(processed)
+                        result[0] = np.deg2rad(processed[0])
+                        return result
+                    q_check = self._registry.Quantity(1.0, u_str)
+                    if q_check.dimensionless:
+                        return processed
+                    msg = (
+                        f"Cannot apply '{ufunc.__name__}' to quantity "
+                        f"with units '{u_str}'"
+                    )
+                    raise DimensionalityError(msg)
+            if ufunc in self._INVERSE_TRIG_UFUNCS:
+                u = input_units[0] if input_units else None
+                if u is not None:
+                    q_check = self._registry.Quantity(1.0, str(u))
+                    if not q_check.dimensionless:
+                        msg = (
+                            f"Cannot apply '{ufunc.__name__}' to quantity "
+                            f"with units '{u}'"
+                        )
+                        raise DimensionalityError(msg)
+            if ufunc in self._DIMENSIONLESS_UFUNCS:
+                u = input_units[0] if input_units else None
+                if u is not None:
+                    q_check = self._registry.Quantity(1.0, str(u))
+                    if not q_check.dimensionless:
+                        msg = (
+                            f"Cannot apply '{ufunc.__name__}' to quantity "
+                            f"with units '{u}'"
+                        )
+                        raise DimensionalityError(msg)
+            return processed
+
         _COMPARISON_UFUNCS: frozenset[np.ufunc] = frozenset()
 
         def __array_ufunc__(
@@ -571,17 +665,35 @@ if has_numpy:
                     processed.append(inp)
                     input_units.append(None)
 
+            processed = self._check_additive_compat(
+                ufunc,
+                inputs,
+                processed,
+                input_units,
+            )
+            processed = self._check_trig_units(
+                ufunc,
+                inputs,
+                processed,
+                input_units,
+            )
+
             result = getattr(ufunc, method)(*processed, **kwargs)
 
             if ufunc in self._COMPARISON_UFUNCS:
                 return result
 
-            out_units = self._ufunc_output_units(
-                ufunc,
-                input_units,
-                processed,
-                self._units_str,
-            )
+            if ufunc in self._TRIG_UFUNCS or ufunc in self._DIMENSIONLESS_UFUNCS:
+                out_units = "dimensionless"
+            elif ufunc in self._INVERSE_TRIG_UFUNCS or ufunc in self._ARCTAN2_UFUNCS:
+                out_units = "radian"
+            else:
+                out_units = self._ufunc_output_units(
+                    ufunc,
+                    input_units,
+                    processed,
+                    self._units_str,
+                )
 
             if isinstance(result, np.ndarray):
                 return ArrayQuantity(result, out_units, self._registry)
@@ -602,12 +714,256 @@ if has_numpy:
         ) -> Any:
             if not all(issubclass(t, ArrayQuantity) for t in types):
                 return NotImplemented
+
+            def _scalar(val: Any, units: str) -> Any:
+                return self._registry.Quantity(float(val), units)
+
+            def _array(val: Any, units: str) -> ArrayQuantity:
+                return ArrayQuantity(np.asarray(val), units, self._registry)
+
             if func is np.sum:
                 result = np.sum(self._magnitude, **kwargs)
-                return self._registry.Quantity(float(result), self._units_str)
+                return _scalar(result, self._units_str)
             if func is np.mean:
                 result = np.mean(self._magnitude, **kwargs)
-                return self._registry.Quantity(float(result), self._units_str)
+                return _scalar(result, self._units_str)
+            if func is np.min or func is np.amin:
+                result = np.min(self._magnitude, **kwargs)
+                return _scalar(result, self._units_str)
+            if func is np.max or func is np.amax:
+                result = np.max(self._magnitude, **kwargs)
+                return _scalar(result, self._units_str)
+            if func is np.std:
+                result = np.std(self._magnitude, **kwargs)
+                return _scalar(result, self._units_str)
+            if func is np.var:
+                result = np.var(self._magnitude, **kwargs)
+                u = self._unit_obj
+                return _scalar(result, str(u * u))
+            if func is np.cumsum:
+                result = np.cumsum(self._magnitude, **kwargs)
+                return _array(result, self._units_str)
+            if func is np.cumprod:
+                result = np.cumprod(self._magnitude, **kwargs)
+                return _array(result, self._units_str)
+            if func is np.argmin:
+                return np.argmin(self._magnitude, **kwargs)
+            if func is np.argmax:
+                return np.argmax(self._magnitude, **kwargs)
+            if func is np.sort:
+                result = np.sort(self._magnitude, **kwargs)
+                return _array(result, self._units_str)
+            if func is np.argsort:
+                return np.argsort(self._magnitude, **kwargs)
+            if func is np.isreal:
+                return np.isreal(self._magnitude)
+            if func is np.iscomplex:
+                return np.iscomplex(self._magnitude)
+            if func is np.reshape:
+                new_shape = (
+                    args[1]
+                    if len(args) > 1
+                    else kwargs.get("newshape", kwargs.get("shape"))
+                )
+                result = np.reshape(self._magnitude, new_shape)  # pyright: ignore[reportCallIssue]
+                return _array(result, self._units_str)
+            if func is np.ones_like:
+                result = np.ones_like(self._magnitude, **kwargs)
+                return _array(result, self._units_str)
+            if func is np.zeros_like:
+                result = np.zeros_like(self._magnitude, **kwargs)
+                return _array(result, self._units_str)
+            if func is np.full_like:
+                fill = args[1] if len(args) > 1 else kwargs.get("fill_value", 0)
+                if isinstance(fill, ArrayQuantity | ScalarQuantity):
+                    fill = fill.magnitude
+                result = np.full_like(self._magnitude, fill, **kwargs)
+                return _array(result, self._units_str)
+            if func is np.concatenate:
+                arrays = args[0]
+                mags = [
+                    a._magnitude if isinstance(a, ArrayQuantity) else a for a in arrays
+                ]
+                result = np.concatenate(mags, **kwargs)
+                return _array(result, self._units_str)
+            if func is np.stack:
+                arrays = args[0]
+                mags = [
+                    a._magnitude if isinstance(a, ArrayQuantity) else a for a in arrays
+                ]
+                result = np.stack(mags, **kwargs)
+                return _array(result, self._units_str)
+            if func is np.where:
+                condition = args[0]
+                if len(args) >= 3:
+                    x = (
+                        args[1]._magnitude
+                        if isinstance(args[1], ArrayQuantity)
+                        else args[1]
+                    )
+                    y = (
+                        args[2]._magnitude
+                        if isinstance(args[2], ArrayQuantity)
+                        else args[2]
+                    )
+                    result = np.where(condition, x, y)
+                    return _array(result, self._units_str)
+                return np.where(condition)
+            if func is np.clip:
+                arr = (
+                    args[0]._magnitude
+                    if isinstance(args[0], ArrayQuantity)
+                    else args[0]
+                )
+                a_min = kwargs.get("a_min", args[1] if len(args) > 1 else None)
+                a_max = kwargs.get("a_max", args[2] if len(args) > 2 else None)
+                if isinstance(a_min, ArrayQuantity | ScalarQuantity):
+                    a_min = a_min.magnitude  # pyright: ignore[reportOptionalMemberAccess]
+                if isinstance(a_max, ArrayQuantity | ScalarQuantity):
+                    a_max = a_max.magnitude  # pyright: ignore[reportOptionalMemberAccess]
+                result = np.clip(arr, a_min, a_max)
+                return _array(result, self._units_str)
+            if func is np.ptp:
+                result = np.ptp(self._magnitude, **kwargs)
+                return _scalar(result, self._units_str)
+            if func is np.median:
+                result = np.median(self._magnitude, **kwargs)
+                return _scalar(result, self._units_str)
+            if func is np.percentile:
+                q_val = args[1] if len(args) > 1 else kwargs.get("q")
+                result = np.percentile(self._magnitude, q_val, **kwargs)  # type: ignore[arg-type]
+                return _scalar(result, self._units_str)
+            if func is np.dot:
+                a, b = args[0], args[1]
+                a_mag = a._magnitude if isinstance(a, ArrayQuantity) else np.asarray(a)
+                b_mag = b._magnitude if isinstance(b, ArrayQuantity) else np.asarray(b)
+                a_u = a._unit_obj if isinstance(a, ArrayQuantity) else None
+                b_u = b._unit_obj if isinstance(b, ArrayQuantity) else None
+                result = np.dot(a_mag, b_mag, **kwargs)
+                if a_u is not None and b_u is not None:
+                    out_u = str(a_u * b_u)
+                elif a_u is not None:
+                    out_u = str(a_u)
+                elif b_u is not None:
+                    out_u = str(b_u)
+                else:
+                    out_u = "dimensionless"
+                if isinstance(result, np.ndarray):
+                    return _array(result, out_u)
+                return _scalar(result, out_u)
+            if func is np.cross:
+                a, b = args[0], args[1]
+                a_mag = a._magnitude if isinstance(a, ArrayQuantity) else np.asarray(a)
+                b_mag = b._magnitude if isinstance(b, ArrayQuantity) else np.asarray(b)
+                a_u = a._unit_obj if isinstance(a, ArrayQuantity) else None
+                b_u = b._unit_obj if isinstance(b, ArrayQuantity) else None
+                result = np.cross(a_mag, b_mag, **kwargs)
+                if a_u is not None and b_u is not None:
+                    out_u = str(a_u * b_u)
+                elif a_u is not None:
+                    out_u = str(a_u)
+                elif b_u is not None:
+                    out_u = str(b_u)
+                else:
+                    out_u = "dimensionless"
+                if isinstance(result, np.ndarray):
+                    return _array(result, out_u)
+                return _scalar(result, out_u)
+            if func is np.outer:
+                a, b = args[0], args[1]
+                a_mag = a._magnitude if isinstance(a, ArrayQuantity) else np.asarray(a)
+                b_mag = b._magnitude if isinstance(b, ArrayQuantity) else np.asarray(b)
+                a_u = a._unit_obj if isinstance(a, ArrayQuantity) else None
+                b_u = b._unit_obj if isinstance(b, ArrayQuantity) else None
+                result = np.outer(a_mag, b_mag, **kwargs)
+                if a_u is not None and b_u is not None:
+                    out_u = str(a_u * b_u)
+                elif a_u is not None:
+                    out_u = str(a_u)
+                elif b_u is not None:
+                    out_u = str(b_u)
+                else:
+                    out_u = "dimensionless"
+                return _array(result, out_u)
+            if func is np.inner:
+                a, b = args[0], args[1]
+                a_mag = a._magnitude if isinstance(a, ArrayQuantity) else np.asarray(a)
+                b_mag = b._magnitude if isinstance(b, ArrayQuantity) else np.asarray(b)
+                a_u = a._unit_obj if isinstance(a, ArrayQuantity) else None
+                b_u = b._unit_obj if isinstance(b, ArrayQuantity) else None
+                result = np.inner(a_mag, b_mag, **kwargs)
+                if a_u is not None and b_u is not None:
+                    out_u = str(a_u * b_u)
+                elif a_u is not None:
+                    out_u = str(a_u)
+                elif b_u is not None:
+                    out_u = str(b_u)
+                else:
+                    out_u = "dimensionless"
+                if isinstance(result, np.ndarray):
+                    return _array(result, out_u)
+                return _scalar(result, out_u)
+            if func is np.vdot:
+                a, b = args[0], args[1]
+                a_mag = a._magnitude if isinstance(a, ArrayQuantity) else np.asarray(a)
+                b_mag = b._magnitude if isinstance(b, ArrayQuantity) else np.asarray(b)
+                a_u = a._unit_obj if isinstance(a, ArrayQuantity) else None
+                b_u = b._unit_obj if isinstance(b, ArrayQuantity) else None
+                result = np.vdot(a_mag, b_mag)
+                if a_u is not None and b_u is not None:
+                    out_u = str(a_u * b_u)
+                elif a_u is not None:
+                    out_u = str(a_u)
+                elif b_u is not None:
+                    out_u = str(b_u)
+                else:
+                    out_u = "dimensionless"
+                return _scalar(result, out_u)
+            if func is np.correlate:
+                a, b = args[0], args[1]
+                a_mag = a._magnitude if isinstance(a, ArrayQuantity) else np.asarray(a)
+                b_mag = b._magnitude if isinstance(b, ArrayQuantity) else np.asarray(b)
+                a_u = a._unit_obj if isinstance(a, ArrayQuantity) else None
+                b_u = b._unit_obj if isinstance(b, ArrayQuantity) else None
+                result = np.correlate(a_mag, b_mag, **kwargs)
+                if a_u is not None and b_u is not None:
+                    out_u = str(a_u * b_u)
+                elif a_u is not None:
+                    out_u = str(a_u)
+                elif b_u is not None:
+                    out_u = str(b_u)
+                else:
+                    out_u = "dimensionless"
+                return _array(result, out_u)
+            if func is np.trapezoid:
+                y = args[0]
+                y_mag = y._magnitude if isinstance(y, ArrayQuantity) else np.asarray(y)
+                y_u = y._unit_obj if isinstance(y, ArrayQuantity) else None
+                trap_kwargs = dict(kwargs)
+                x = args[1] if len(args) > 1 else kwargs.get("x")
+                if x is not None and "x" in trap_kwargs:
+                    del trap_kwargs["x"]
+                x_u = None
+                if x is not None:
+                    if isinstance(x, ArrayQuantity):
+                        x_u = x._unit_obj
+                        x_mag = x._magnitude
+                    else:
+                        x_mag = np.asarray(x)
+                    result = np.trapezoid(y_mag, x_mag, **trap_kwargs)
+                else:
+                    result = np.trapezoid(y_mag, **trap_kwargs)
+                if y_u is not None and x_u is not None:
+                    out_u = str(y_u * x_u)
+                elif y_u is not None:
+                    out_u = str(y_u)
+                elif x_u is not None:
+                    out_u = str(x_u)
+                else:
+                    out_u = "dimensionless"
+                if isinstance(result, np.ndarray):
+                    return _array(result, out_u)
+                return _scalar(result, out_u)
             return NotImplemented
 
     ArrayQuantity._COMPARISON_UFUNCS = frozenset(
@@ -625,6 +981,67 @@ if has_numpy:
             np.logical_and,
             np.logical_or,
             np.logical_not,
+        },
+    )
+
+    ArrayQuantity._DIMENSIONLESS_UFUNCS = frozenset(
+        {
+            np.exp,
+            np.exp2,
+            np.expm1,
+            np.log,
+            np.log2,
+            np.log10,
+            np.log1p,
+            np.logaddexp,
+            np.logaddexp2,
+        },
+    )
+
+    ArrayQuantity._TRIG_UFUNCS = frozenset(
+        {
+            np.sin,
+            np.cos,
+            np.tan,
+            np.sinh,
+            np.cosh,
+            np.tanh,
+        },
+    )
+
+    ArrayQuantity._INVERSE_TRIG_UFUNCS = frozenset(
+        {
+            np.arcsin,
+            np.arccos,
+            np.arctan,
+            np.arcsinh,
+            np.arccosh,
+            np.arctanh,
+        },
+    )
+
+    # arctan2 takes two args with matching units and returns radians
+    ArrayQuantity._ARCTAN2_UFUNCS = frozenset({np.arctan2})
+
+    ArrayQuantity._MATCHING_DIMS_UFUNCS = frozenset(
+        {
+            np.add,
+            np.subtract,
+            np.remainder,
+            np.mod,
+            np.fmod,
+            np.copysign,
+            np.nextafter,
+            np.greater,
+            np.greater_equal,
+            np.less,
+            np.less_equal,
+            np.equal,
+            np.not_equal,
+            np.maximum,
+            np.minimum,
+            np.hypot,
+            np.arctan2,
         },
     )
 
