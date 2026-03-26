@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -43,7 +44,7 @@ else:
     result = subprocess.run(  # noqa: S603
         [sys.executable, "-c", script],
         cwd=ROOT,
-        env={"PYTHONPATH": str(ROOT / "python")},
+        env={**os.environ, "PYTHONPATH": str(ROOT / "python")},
         capture_output=True,
         text=True,
         check=False,

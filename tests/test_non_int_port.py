@@ -11,7 +11,7 @@ import math
 import operator as op
 from decimal import Decimal
 from fractions import Fraction
-from typing import Any
+from typing import Any, Union
 
 import pytest
 from pintrs import (
@@ -20,7 +20,7 @@ from pintrs import (
     UnitRegistry,
 )
 
-NonIntType = type[Decimal] | type[Fraction] | type[float]
+NonIntType = Union[type[Decimal], type[Fraction], type[float]]
 
 
 @pytest.fixture

@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-latest, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
@@ -52,6 +52,58 @@ jobs:
       - name: Run tests
         run: pytest
 
+  test-macos-x86_64:
+    name: Test (Python ${{ matrix.python-version }}, macos x86_64 via Rosetta)
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust x86_64 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Install universal2 Python
+        run: |
+          MINOR="${{ matrix.python-version }}"
+          FTP="https://www.python.org/ftp/python"
+
+          # Find the latest patch release that ships a macOS .pkg installer
+          curl -sL "$FTP/" | grep -oE ">${MINOR}\.[0-9]+/" | tr -d '>/' | sort -V -r | while read -r PV; do
+            URL="${FTP}/${PV}/python-${PV}-macos11.pkg"
+            if curl -sI -o /dev/null -w "%{http_code}" "$URL" | grep -q "200"; then
+              echo "Found installer: $URL"
+              curl -sLO "$URL"
+              sudo installer -pkg "python-${PV}-macos11.pkg" -target /
+              break
+            fi
+          done
+
+          # Verify the install worked
+          PY="/Library/Frameworks/Python.framework/Versions/${MINOR}/bin/python${MINOR}"
+          arch -x86_64 "$PY" --version
+
+      - name: Build x86_64 wheel
+        run: |
+          pip install maturin
+          maturin build --release --target x86_64-apple-darwin -o dist
+
+      - name: Run tests under Rosetta
+        run: |
+          MINOR="${{ matrix.python-version }}"
+          PY="/Library/Frameworks/Python.framework/Versions/${MINOR}/bin/python${MINOR}"
+          arch -x86_64 /bin/bash -c "
+            ${PY} -m venv .venv-x86
+            source .venv-x86/bin/activate
+            pip install dist/*.whl pytest numpy
+            pytest
+          "
+
   test-musl:
     name: Test (Python ${{ matrix.python-version }}, musl ${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
@@ -65,15 +117,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build and test in Alpine container
-        uses: addnab/docker-run-action@v3
-        with:
-          image: python:${{ matrix.python-version }}-alpine
-          options: -v ${{ github.workspace }}:/work -w /work
-          run: |
-            apk add --no-cache rust cargo
-            pip install maturin pytest numpy
-            maturin develop --release
-            pytest
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/work \
+            -w /work \
+            python:${{ matrix.python-version }}-alpine \
+            sh -c 'apk add --no-cache rust cargo && pip install maturin pytest numpy && maturin develop --release && pytest'
 
   lint:
     name: Lint & Type Check
