@@ -95,7 +95,7 @@ class System:
             KeyError: If no preferred unit is defined for the dimension.
         """
         dim = ureg.get_dimensionality(src_units)
-        target = self._rules.get(dim)
+        target = self._rules.get(str(dim))
         if target is None:
             return value, src_units
         factor = ureg._get_conversion_factor(src_units, target)
@@ -132,7 +132,7 @@ class System:
                 ureg = UnitRegistry()
                 for unit in units:
                     dim = ureg.get_dimensionality(unit)
-                    sys.add_rule(dim, unit)
+                    sys.add_rule(str(dim), unit)
             return sys
 
         name = lines[0].strip() if lines else ""

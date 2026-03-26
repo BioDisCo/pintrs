@@ -102,14 +102,14 @@ class Context:
             Transformed magnitude in SI base units of dst, or None if no
             transformation is registered for this pair.
         """
-        func = self._transforms.get((src_dim, dst_dim))
+        func = self._transforms.get((str(src_dim), str(dst_dim)))
         if func is None:
             return None
         result = func(ureg, quantity, **self._defaults)
-        if hasattr(result, "check") and result.check(dst_dim):
+        if hasattr(result, "check") and result.check(str(dst_dim)):
             return result
 
-        si_unit = self._DIM_TO_SI_UNIT.get(src_dim)
+        si_unit = self._DIM_TO_SI_UNIT.get(str(src_dim))
         if si_unit is not None:
             mag = float(quantity.m_as(si_unit))
         else:

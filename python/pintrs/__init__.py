@@ -577,6 +577,108 @@ def make_quantity(
 # --- Monkey-patch UnitRegistry with Python-level methods ---
 
 
+class _Dimensionality(dict):  # type: ignore[type-arg]
+    """Dict-like dimensionality object for pint compatibility.
+
+    Pint returns UnitsContainer({'[length]': 1, '[time]': -1}) from
+    .dimensionality. This class parses pintrs's string representation
+    into the same dict-like interface.
+    """
+
+    def __init__(self, dim_string: str) -> None:
+        super().__init__()
+        self._string = dim_string
+        if dim_string in ("dimensionless", "[]", "") or not dim_string:
+            return
+        normalized = dim_string.replace(" ", "").replace("**", "^")
+        if "/" in normalized:
+            num, den = normalized.split("/", 1)
+        else:
+            num, den = normalized, ""
+        for part in num.split("*"):
+            if not part or part == "1":
+                continue
+            if "^" in part:
+                name, exp = part.split("^", 1)
+                self[name] = float(exp)
+            else:
+                self[part] = 1.0
+        for part in den.split("*"):
+            if not part or part == "1":
+                continue
+            if "^" in part:
+                name, exp = part.split("^", 1)
+                self[name] = -float(exp)
+            else:
+                self[part] = -1.0
+
+    def __str__(self) -> str:
+        return self._string
+
+    def __repr__(self) -> str:
+        return self._string
+
+    def __hash__(self) -> int:  # type: ignore[override]
+        return hash(frozenset(self.items()))
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self._string == other
+        return super().__eq__(other)
+
+    def __contains__(self, item: object) -> bool:
+        if isinstance(item, str) and item not in dict.keys(self):
+            return item in self._string
+        return super().__contains__(item)
+
+    def __bool__(self) -> bool:
+        return len(self) > 0
+
+
+def _parse_dimensionality(dim_string: str) -> _Dimensionality:
+    """Parse a dimensionality string into a dict-like object."""
+    return _Dimensionality(dim_string)
+
+
+_original_q_dimensionality = Quantity.dimensionality  # type: ignore[attr-defined]
+
+
+def _q_dimensionality_compat(self: Any) -> _Dimensionality:
+    dim_str: str = _original_q_dimensionality.__get__(self)  # type: ignore[misc]
+    return _parse_dimensionality(dim_str)
+
+
+Quantity.dimensionality = property(_q_dimensionality_compat)  # type: ignore[attr-defined,assignment]
+
+_original_u_dimensionality = Unit.dimensionality  # type: ignore[attr-defined]
+
+
+def _u_dimensionality_compat(self: Any) -> _Dimensionality:
+    dim_str: str = _original_u_dimensionality.__get__(self)  # type: ignore[misc]
+    return _parse_dimensionality(dim_str)
+
+
+Unit.dimensionality = property(_u_dimensionality_compat)  # type: ignore[attr-defined,assignment]
+
+
+def _q_REGISTRY(self: Any) -> UnitRegistry:  # noqa: N802
+    return self._registry  # type: ignore[no-any-return]
+
+
+Quantity._REGISTRY = property(_q_REGISTRY)  # type: ignore[attr-defined]
+
+
+_original_get_dimensionality = UnitRegistry.get_dimensionality
+
+
+def _ureg_get_dimensionality_compat(self: Any, unit: str) -> _Dimensionality:
+    dim_str: str = _original_get_dimensionality(self, unit)
+    return _parse_dimensionality(dim_str)
+
+
+UnitRegistry.get_dimensionality = _ureg_get_dimensionality_compat  # type: ignore[attr-defined,assignment]
+
+
 def _ureg_wraps(
     self: UnitRegistry,
     ret: str | Unit | None,
@@ -909,7 +1011,7 @@ def _quantity_to_with_context(self: Any, units: str) -> Any:
             raise
         if hasattr(result, "to"):
             return result.to(units)
-        base_q = ureg.Quantity(float(result), _base_unit_for_dim(dst_dim))
+        base_q = ureg.Quantity(float(result), _base_unit_for_dim(str(dst_dim)))
         return _original_quantity_to(base_q, units)
 
 

@@ -30,6 +30,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
 
+      - name: Create virtualenv
+        run: python -m venv .venv
+
+      - name: Activate virtualenv
+        run: |
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv" >> "$GITHUB_ENV"
+
       - name: Install dependencies
         run: pip install maturin pytest numpy
 
@@ -99,7 +107,7 @@ jobs:
             -v ${{ github.workspace }}:/work \
             -w /work \
             python:3.12-alpine \
-            sh -c 'apk add --no-cache rust cargo && pip install maturin pytest numpy && maturin develop --release && pytest'
+            sh -c 'apk add --no-cache rust cargo && python -m venv .venv && . .venv/bin/activate && pip install maturin pytest numpy && maturin develop --release && pytest'
 
   lint:
     name: Lint & Type Check
