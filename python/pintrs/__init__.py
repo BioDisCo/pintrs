@@ -668,6 +668,13 @@ def _q_REGISTRY(self: Any) -> UnitRegistry:  # noqa: N802
 Quantity._REGISTRY = property(_q_REGISTRY)  # type: ignore[attr-defined]
 
 
+def _u_REGISTRY(self: Any) -> UnitRegistry:  # noqa: N802
+    return self._registry  # type: ignore[no-any-return]
+
+
+Unit._REGISTRY = property(_u_REGISTRY)  # type: ignore[attr-defined]
+
+
 _original_get_dimensionality = UnitRegistry.get_dimensionality
 
 

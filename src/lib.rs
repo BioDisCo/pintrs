@@ -1523,6 +1523,14 @@ impl PyUnit {
     }
 
     #[getter]
+    fn _registry(&self) -> PyUnitRegistry {
+        PyUnitRegistry {
+            inner: Arc::clone(&self.registry),
+            _init_kwargs: None,
+        }
+    }
+
+    #[getter]
     fn dimensionality(&self) -> PyResult<String> {
         let mut reg = self.registry.lock().unwrap();
         let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;

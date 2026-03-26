@@ -142,6 +142,12 @@ impl UnitRegistry {
             remaining = unresolved;
         }
 
+        // Promote kilogram to root unit for [mass].
+        // In SI, kilogram (not gram) is the base unit for mass even though
+        // gram is the unprefixed form in the definition file.  Pint applies
+        // the same promotion so that to_base_units() returns kilograms.
+        reg.promote_kilogram();
+
         // Process aliases
         for alias_def in &alias_defs {
             if let Some(canonical) = reg.name_map.get(&alias_def.name).cloned() {
@@ -207,6 +213,59 @@ impl UnitRegistry {
 
         self.register_unit(entry);
         Ok(())
+    }
+
+    /// Promote kilogram to the root unit for mass (matching pint behaviour).
+    ///
+    /// After all definitions are loaded, `gram` is the root unit for `[mass]`
+    /// because the definition file says `gram = [mass]`.  In SI however,
+    /// `kilogram` is the base unit.  This method rewrites every UnitEntry so
+    /// that occurrences of `gram` in `root_units` are replaced by `kilogram`
+    /// with the factor divided by 1000 for each power of gram.
+    fn promote_kilogram(&mut self) {
+        let kilo_factor = match self.prefixes.get("kilo") {
+            Some(p) => p.factor,
+            None => return,
+        };
+        if !self.units.contains_key("gram") {
+            return;
+        }
+
+        let gram_key = "gram";
+        let kg_key = "kilogram";
+
+        let names: Vec<String> = self.units.keys().cloned().collect();
+        for name in names {
+            let entry = self.units.get(&name).unwrap().clone();
+            let gram_exp = entry.root_units.get(gram_key);
+            if gram_exp == 0.0 {
+                continue;
+            }
+            let mut map = indexmap::IndexMap::new();
+            let mut extra_factor = 1.0_f64;
+            for (unit, &exp) in entry.root_units.iter() {
+                if unit == gram_key {
+                    map.insert(kg_key.to_string(), exp);
+                    extra_factor /= kilo_factor.powf(exp);
+                } else {
+                    map.insert(unit.clone(), exp);
+                }
+            }
+            let mut updated = entry;
+            updated.root_units = UnitsContainer::from_map(map);
+            updated.factor *= extra_factor;
+            self.units.insert(name, updated);
+        }
+
+        if !self.name_map.contains_key(kg_key) {
+            self.name_map.insert(kg_key.to_string(), kg_key.to_string());
+            self.name_map
+                .insert("kilograms".to_string(), kg_key.to_string());
+            self.name_map.insert("kg".to_string(), kg_key.to_string());
+        }
+
+        self.unit_info_cache.clear();
+        self.unit_expr_cache.clear();
     }
 
     fn register_unit(&mut self, entry: UnitEntry) {
