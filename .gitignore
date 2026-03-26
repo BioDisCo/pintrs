@@ -11,6 +11,7 @@ dist/
 *.egg-info/
 .venv/
 venv/
+.python-version
 
 # IDE
 .idea/
