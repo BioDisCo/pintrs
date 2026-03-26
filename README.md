@@ -1,22 +1,35 @@
 # pintrs
 
-Fast physical units for Python, with a `pint`-compatible API and Rust performance.
+If you like [`pint`](https://pint.readthedocs.io/) but wish it were faster, `pintrs` is for you. Same API, same workflow, but with the heavy lifting done in Rust.
 
-`pintrs` is for people who like [`pint`](https://pint.readthedocs.io/)'s ergonomics but not its runtime cost. It keeps the familiar `UnitRegistry` and `Quantity` workflow, with the hot path implemented in Rust.
+## Installation
 
-- Drop into common `pint` workflows with minimal code changes
-- Usually **8-150x faster** on core operations
-- Works with NumPy, pandas, Babel, measurements, contexts, groups, and systems
+```bash
+pip install pintrs
+```
 
-## Why pintrs
+## Migration
 
-If your code spends real time creating quantities, parsing unit strings, or converting units, `pintrs` removes a lot of overhead without asking you to relearn the API.
+`pintrs` is designed as a drop-in replacement. Swap your dependency, update your imports, and you're done.
 
-- Quantity creation: **9x faster**
-- Parsing unit strings: **152x faster**
-- Same-unit addition: **14x faster**
+```diff
+- pint
++ pintrs
+```
 
-Benchmarks below were measured with Python 3.12. Lower is better.
+```diff
+- from pint import UnitRegistry
++ from pintrs import UnitRegistry
+
+ureg = UnitRegistry()
+distance = 5 * ureg.kilometer
+time = 2 * ureg.hour
+speed = (distance / time).to("m/s")
+```
+
+## How much faster?
+
+Here's what you get for that one-line change. Measured with Python 3.12; run `python examples/benchmark.py` to reproduce.
 
 | Operation | pintrs | pint | Speedup |
 |---|--:|--:|--:|
@@ -33,54 +46,6 @@ Benchmarks below were measured with Python 3.12. Lower is better.
 | Parse units (`"kg * m / s ** 2"`) | 0.26 us | 38.85 us | **152x** |
 | String formatting | 0.44 us | 7.20 us | **16x** |
 
-Run `python examples/benchmark.py` to reproduce the numbers. Install `pint` alongside `pintrs` for the comparison run.
+## Something not working?
 
-## Migrating from pint
-
-If you already use `pint`, the change is intentionally small: replace `pint` with `pintrs` in your dependencies and swap your imports.
-
-```diff
-- pint
-+ pintrs
-```
-
-```diff
-- from pint import UnitRegistry
-+ from pintrs import UnitRegistry
-
-ureg = UnitRegistry()
-```
-
-Your existing quantity code should continue to look like `pint` code:
-
-```python
-distance = 5 * ureg.kilometer
-time = 2 * ureg.hour
-speed = distance / time
-
-print(speed)           # 2.5 kilometer / hour
-print(speed.to("m/s")) # 0.6944... meter / second
-```
-
-## Compatibility with pint
-
-`pintrs` targets full API compatibility with `pint`.
-
-That includes the core registry and quantity model, conversions and formatting, decorators, measurements, contexts, groups, systems, and integrations with NumPy, pandas, and Babel.
-
-If you already have working `pint` code and performance is the problem, `pintrs` is designed to be the least disruptive upgrade path.
-
-## Installation
-
-```bash
-pip install pintrs
-```
-
-NumPy, pandas, and Babel integrations are available when those packages are installed.
-
-## What you get
-
-- The familiar `pint` API, with Rust underneath
-- Substantial speedups on quantity creation, parsing, conversion, arithmetic, and formatting
-- Support for NumPy, pandas, Babel, measurements, contexts, groups, systems, logarithmic units, and decorators
-- Type information for mypy and pyright
+If you hit a compatibility issue or something behaves differently from `pint`, please [open an issue](https://github.com/BioDisCo/pintrs/issues). Migration should be painless, and if it isn't, we want to know about it.
