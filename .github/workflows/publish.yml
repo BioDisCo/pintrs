@@ -21,8 +21,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build sdist
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1.50.1
         with:
+          maturin-version: v1.12.6
           command: sdist
           args: --out dist
 
@@ -38,7 +39,7 @@ jobs:
       fail-fast: false
       matrix:
         target: [x86_64, aarch64]
-        manylinux: [auto, musllinux_1_1]
+        manylinux: [2_28, musllinux_1_1]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
@@ -51,10 +52,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1.50.1
         with:
+          maturin-version: v1.12.6
           target: ${{ matrix.target }}
-          args: --release --out dist -i python${{ matrix.python-version }}
+          args: --release --out dist --compatibility pypi -i python${{ matrix.python-version }}
           manylinux: ${{ matrix.manylinux }}
 
       - uses: actions/upload-artifact@v4
@@ -68,12 +70,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
-        target: [x86_64, aarch64]
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
-        exclude:
+        include:
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
           - os: windows-latest
-            target: aarch64
+            target: x86_64-pc-windows-msvc
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -85,10 +89,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1.50.1
         with:
+          maturin-version: v1.12.6
           target: ${{ matrix.target }}
-          args: --release --out dist -i python${{ matrix.python-version }}
+          args: --release --out dist --compatibility pypi -i python${{ matrix.python-version }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -101,7 +106,7 @@ jobs:
     needs: [ci, build-sdist, build-wheels-linux, build-wheels-macos-windows]
     environment:
       name: pypi
-      url: https://pypi.org/p/pintrs
+      url: https://pypi.org/project/pintrs/
     permissions:
       id-token: write
 
@@ -112,7 +117,8 @@ jobs:
           merge-multiple: true
 
       - name: Publish to PyPI
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1.50.1
         with:
+          maturin-version: v1.12.6
           command: upload
-          args: --non-interactive --skip-existing dist/*
+          args: --non-interactive --skip-existing --compatibility pypi dist/*
