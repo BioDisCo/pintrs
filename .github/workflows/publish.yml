@@ -121,4 +121,4 @@ jobs:
         with:
           maturin-version: v1.12.6
           command: upload
-          args: --non-interactive --skip-existing --compatibility pypi dist/*
+          args: --non-interactive --skip-existing dist/*
