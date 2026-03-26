@@ -1,6 +1,6 @@
 [package]
 name = "pintrs"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 description = "Fast Rust-based Python extension for physical unit manipulation"
 
