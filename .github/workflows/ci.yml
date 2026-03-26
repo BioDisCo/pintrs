@@ -15,8 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.12", "3.13"]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-latest, windows-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +28,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
 
       - name: Create virtualenv
         run: python -m venv .venv
@@ -50,6 +51,29 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  test-musl:
+    name: Test (Python ${{ matrix.python-version }}, musl ${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        arch: [x86_64, aarch64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and test in Alpine container
+        uses: addnab/docker-run-action@v3
+        with:
+          image: python:${{ matrix.python-version }}-alpine
+          options: -v ${{ github.workspace }}:/work -w /work
+          run: |
+            apk add --no-cache rust cargo
+            pip install maturin pytest numpy
+            maturin develop --release
+            pytest
 
   lint:
     name: Lint & Type Check

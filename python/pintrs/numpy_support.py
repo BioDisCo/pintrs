@@ -90,7 +90,7 @@ if has_numpy:
 
         @property
         def dtype(self) -> np.dtype[Any]:
-            return self._magnitude.dtype
+            return self._magnitude.dtype  # type: ignore[no-any-return]
 
         @property
         def T(self) -> ArrayQuantity:  # noqa: N802
@@ -102,7 +102,7 @@ if has_numpy:
 
         @property
         def flat(self) -> np.flatiter[Any]:
-            return self._magnitude.flat
+            return self._magnitude.flat  # type: ignore[no-any-return]
 
         @property
         def real(self) -> ArrayQuantity:
@@ -193,7 +193,7 @@ if has_numpy:
             max: float | None = None,  # noqa: A002
         ) -> ArrayQuantity:
             return ArrayQuantity(
-                self._magnitude.clip(min, max),  # type: ignore[arg-type]
+                self._magnitude.clip(min, max),
                 self._units_str,
                 self._registry,
             )
@@ -208,7 +208,7 @@ if has_numpy:
             self,
             value: float | ScalarQuantity | ArrayQuantity,
         ) -> None:
-            if isinstance(value, ScalarQuantity | ArrayQuantity):
+            if isinstance(value, (ScalarQuantity, ArrayQuantity)):
                 self._magnitude.fill(value.magnitude)
             else:
                 self._magnitude.fill(value)
@@ -218,7 +218,7 @@ if has_numpy:
             indices: NDArray[np.intp],
             values: float | ScalarQuantity | ArrayQuantity,
         ) -> None:
-            if isinstance(values, ScalarQuantity | ArrayQuantity):
+            if isinstance(values, (ScalarQuantity, ArrayQuantity)):
                 self._magnitude.put(indices, values.magnitude)
             else:
                 self._magnitude.put(indices, values)
@@ -228,8 +228,8 @@ if has_numpy:
             v: float | ScalarQuantity | ArrayQuantity,
             side: str = "left",
         ) -> Any:
-            mag = v.magnitude if isinstance(v, ScalarQuantity | ArrayQuantity) else v
-            return self._magnitude.searchsorted(mag, side=side)  # type: ignore[call-overload]
+            mag = v.magnitude if isinstance(v, (ScalarQuantity, ArrayQuantity)) else v
+            return self._magnitude.searchsorted(mag, side=side)
 
         def dot(
             self,
@@ -259,7 +259,7 @@ if has_numpy:
             key: int | slice | NDArray[np.intp],
             value: float | ScalarQuantity | ArrayQuantity,
         ) -> None:
-            if isinstance(value, ScalarQuantity | ArrayQuantity):
+            if isinstance(value, (ScalarQuantity, ArrayQuantity)):
                 self._magnitude[key] = value.magnitude
             else:
                 self._magnitude[key] = value
@@ -439,7 +439,7 @@ if has_numpy:
                 return bool(np.array_equal(self._magnitude, other._magnitude))
             if isinstance(other, ScalarQuantity):
                 return bool(np.array_equal(self._magnitude, other.magnitude))
-            if isinstance(other, np.ndarray | list | tuple | int | float | complex):
+            if isinstance(other, (np.ndarray, list, tuple, int, float, complex)):
                 return bool(np.array_equal(self._magnitude, other))
             return False
 
@@ -699,7 +699,7 @@ if has_numpy:
                 return ArrayQuantity(result, out_units, self._registry)
             if np.isscalar(result):
                 magnitude = result.item() if isinstance(result, np.generic) else result
-                if isinstance(magnitude, int | float):
+                if isinstance(magnitude, (int, float)):
                     return self._registry.Quantity(float(magnitude), out_units)
                 if isinstance(magnitude, str):
                     return self._registry.Quantity(magnitude, out_units)
@@ -775,7 +775,7 @@ if has_numpy:
                 return _array(result, self._units_str)
             if func is np.full_like:
                 fill = args[1] if len(args) > 1 else kwargs.get("fill_value", 0)
-                if isinstance(fill, ArrayQuantity | ScalarQuantity):
+                if isinstance(fill, (ArrayQuantity, ScalarQuantity)):
                     fill = fill.magnitude
                 result = np.full_like(self._magnitude, fill, **kwargs)
                 return _array(result, self._units_str)
@@ -817,9 +817,9 @@ if has_numpy:
                 )
                 a_min = kwargs.get("a_min", args[1] if len(args) > 1 else None)
                 a_max = kwargs.get("a_max", args[2] if len(args) > 2 else None)
-                if isinstance(a_min, ArrayQuantity | ScalarQuantity):
+                if isinstance(a_min, (ArrayQuantity, ScalarQuantity)):
                     a_min = a_min.magnitude  # pyright: ignore[reportOptionalMemberAccess]
-                if isinstance(a_max, ArrayQuantity | ScalarQuantity):
+                if isinstance(a_max, (ArrayQuantity, ScalarQuantity)):
                     a_max = a_max.magnitude  # pyright: ignore[reportOptionalMemberAccess]
                 result = np.clip(arr, a_min, a_max)
                 return _array(result, self._units_str)
@@ -831,7 +831,7 @@ if has_numpy:
                 return _scalar(result, self._units_str)
             if func is np.percentile:
                 q_val = args[1] if len(args) > 1 else kwargs.get("q")
-                result = np.percentile(self._magnitude, q_val, **kwargs)  # type: ignore[arg-type]
+                result = np.percentile(self._magnitude, q_val, **kwargs)
                 return _scalar(result, self._units_str)
             if func is np.dot:
                 a, b = args[0], args[1]

@@ -109,7 +109,7 @@ def wraps(
         def wrapper(*values: Any) -> Any:
             new_args: list[Any] = []
             if args is not None:
-                for val, unit_spec in zip(values, args, strict=False):
+                for val, unit_spec in zip(values, args):
                     if unit_spec is None:
                         if isinstance(val, Quantity):
                             new_args.append(val.magnitude)
@@ -150,7 +150,7 @@ def check(
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
         def wrapper(*values: Any) -> Any:
-            for val, expected_dim in zip(values, args, strict=False):
+            for val, expected_dim in zip(values, args):
                 if expected_dim is None:
                     continue
                 if not isinstance(val, Quantity):
@@ -463,7 +463,7 @@ class Measurement:
             return Measurement(new_val, new_err)
         if isinstance(other, Quantity):
             return Measurement(self._value + other, self._error)
-        if isinstance(other, int | float):
+        if isinstance(other, (int, float)):
             return Measurement(self._value + other, self._error)
         return NotImplemented
 
@@ -477,14 +477,14 @@ class Measurement:
             return Measurement(new_val, new_err)
         if isinstance(other, Quantity):
             return Measurement(self._value - other, self._error)
-        if isinstance(other, int | float):
+        if isinstance(other, (int, float)):
             return Measurement(self._value - other, self._error)
         return NotImplemented
 
     def __rsub__(self, other: Quantity | float) -> Measurement:
         if isinstance(other, Quantity):
             return Measurement(other - self._value, self._error)
-        if isinstance(other, int | float):
+        if isinstance(other, (int, float)):
             return Measurement(other - self._value, self._error)
         return NotImplemented
 
@@ -494,7 +494,7 @@ class Measurement:
             rel_err = (self.rel**2 + other.rel**2) ** 0.5
             new_err = abs(new_val.magnitude) * rel_err
             return Measurement(new_val, new_err)
-        if isinstance(other, int | float):
+        if isinstance(other, (int, float)):
             return Measurement(self._value * other, self._error * abs(other))
         return NotImplemented
 
@@ -507,12 +507,12 @@ class Measurement:
             rel_err = (self.rel**2 + other.rel**2) ** 0.5
             new_err = abs(new_val.magnitude) * rel_err
             return Measurement(new_val, new_err)
-        if isinstance(other, int | float):
+        if isinstance(other, (int, float)):
             return Measurement(self._value / other, self._error / abs(other))
         return NotImplemented
 
     def __rtruediv__(self, other: float) -> Measurement:
-        if isinstance(other, int | float):
+        if isinstance(other, (int, float)):
             new_val = other / self._value
             new_err = abs(new_val.magnitude) * self.rel
             return Measurement(new_val, new_err)
@@ -557,7 +557,7 @@ def _is_array_like(value: Any) -> bool:
     try:
         import numpy as np  # noqa: PLC0415
 
-        return isinstance(value, np.ndarray | list) and not isinstance(value, str)
+        return isinstance(value, (np.ndarray, list)) and not isinstance(value, str)
     except ImportError:
         return False
 
@@ -1038,7 +1038,7 @@ def _is_duck_array(value: Any) -> bool:
             return True
     except ImportError:
         pass
-    if isinstance(value, list | tuple):
+    if isinstance(value, (list, tuple)):
         return True
     return hasattr(value, "__array_function__") or hasattr(value, "__array_ufunc__")
 
@@ -1500,7 +1500,7 @@ def _to_arr(other: Any) -> Any:
     """Convert array-like to ndarray. Returns None if not array-like."""
     if _np_cached is not None and isinstance(other, _np_cached.ndarray):
         return other
-    if isinstance(other, list | tuple):
+    if isinstance(other, (list, tuple)):
         return _np_cached.asarray(other) if _np_cached is not None else None
     if hasattr(other, "__array_function__"):
         return _np_cached.asarray(other) if _np_cached is not None else None

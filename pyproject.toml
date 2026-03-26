@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "pintrs"
 dynamic = ["version"]
 description = "Fast Rust-based Python extension for physical unit manipulation"
-requires-python = ">=3.12"
+requires-python = ">=3.9"
 authors = [{ name = "Thomas Nowak", email = "thomas@thomasnowak.net" }]
 license = "Apache-2.0"
 readme = "README.md"
@@ -15,8 +15,12 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: Physics",
     "Typing :: Typed",
@@ -35,7 +39,7 @@ module-name = "pintrs._core"
 python-source = "python"
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py39"
 line-length = 88
 
 [tool.ruff.lint]
@@ -54,7 +58,7 @@ ignore = ["S101"]
 
 [tool.mypy]
 strict = true
-python_version = "3.12"
+python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -66,8 +70,16 @@ disallow_any_generics = true
 testpaths = ["tests"]
 addopts = "-ra -q --strict-markers --strict-config"
 
+[tool.tox]
+env_list = ["py39", "py310", "py311", "py312", "py313", "py314"]
+
+[tool.tox.env_run]
+deps = ["maturin>=1.0,<2.0", "pytest", "numpy>=1.24"]
+commands_pre = [["maturin", "develop", "--release"]]
+commands = [["pytest", "tests/", "-x", "-q"]]
+
 [tool.pyright]
-pythonVersion = "3.12"
+pythonVersion = "3.9"
 typeCheckingMode = "strict"
 venvPath = "."
 venv = "venv"
