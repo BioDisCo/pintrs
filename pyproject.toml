@@ -81,5 +81,3 @@ commands = [["pytest", "tests/", "-x", "-q"]]
 [tool.pyright]
 pythonVersion = "3.9"
 typeCheckingMode = "strict"
-venvPath = "."
-venv = "venv"

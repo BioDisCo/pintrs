@@ -4,18 +4,37 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      confirm_publish:
+        description: "Type RELEASE to confirm manual PyPI publication"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  confirm-manual-release:
+    name: Confirm manual release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate manual release confirmation
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.confirm_publish }}" != "RELEASE" ]; then
+            echo "Manual publish aborted: set confirm_publish to RELEASE." >&2
+            exit 1
+          fi
+
   ci:
     name: CI
+    needs: [confirm-manual-release]
     uses: ./.github/workflows/ci.yml
 
   build-sdist:
     name: Build source distribution
-    needs: [ci]
+    needs: [confirm-manual-release, ci]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +53,7 @@ jobs:
 
   build-wheels-linux:
     name: Build wheels (Linux ${{ matrix.manylinux }}, ${{ matrix.target }}, py${{ matrix.python-version }})
+    needs: [confirm-manual-release]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -64,19 +84,13 @@ jobs:
           name: wheel-linux-${{ matrix.manylinux }}-${{ matrix.target }}-py${{ matrix.python-version }}
           path: dist/*.whl
 
-  build-wheels-macos-windows:
-    name: Build wheels (${{ matrix.os }}, ${{ matrix.target }}, py${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
+  build-wheels-macos-arm64:
+    name: Build wheels (macOS arm64, py${{ matrix.python-version }})
+    needs: [confirm-manual-release]
+    runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-latest
-            target: x86_64-apple-darwin
-          - os: macos-latest
-            target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
@@ -92,18 +106,78 @@ jobs:
         uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1.50.1
         with:
           maturin-version: v1.12.6
-          target: ${{ matrix.target }}
+          target: aarch64-apple-darwin
           args: --release --out dist --compatibility pypi -i python${{ matrix.python-version }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}-${{ matrix.target }}-py${{ matrix.python-version }}
+          name: wheel-macos-latest-aarch64-apple-darwin-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  build-wheels-macos-intel:
+    name: Build wheels (macOS x86_64, py${{ matrix.python-version }})
+    needs: [confirm-manual-release]
+    runs-on: macos-15-intel
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          allow-prereleases: true
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1.50.1
+        with:
+          maturin-version: v1.12.6
+          target: x86_64-apple-darwin
+          args: --release --out dist --compatibility pypi -i python${{ matrix.python-version }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-macos-15-intel-x86_64-apple-darwin-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+  build-wheels-windows:
+    name: Build wheels (Windows x86_64, py${{ matrix.python-version }})
+    needs: [confirm-manual-release]
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          allow-prereleases: true
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1.50.1
+        with:
+          maturin-version: v1.12.6
+          target: x86_64-pc-windows-msvc
+          args: --release --out dist --compatibility pypi -i python${{ matrix.python-version }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-windows-latest-x86_64-pc-windows-msvc-py${{ matrix.python-version }}
           path: dist/*.whl
 
   publish:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: [ci, build-sdist, build-wheels-linux, build-wheels-macos-windows]
+    needs: [ci, build-sdist, build-wheels-linux, build-wheels-macos-arm64, build-wheels-macos-intel, build-wheels-windows]
     environment:
       name: pypi
       url: https://pypi.org/project/pintrs/
