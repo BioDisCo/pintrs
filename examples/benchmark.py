@@ -270,6 +270,72 @@ def numpy_benchmarks() -> None:
     bench("np.sqrt (1000 elements)", "np.sqrt(q * q)", setup)
 
 
+def numpy_pint_comparison() -> None:
+    """Compare numpy array performance between pintrs and pint."""
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("numpy") is None or importlib.util.find_spec("pint") is None:
+            raise ImportError
+    except ImportError:
+        return
+
+    print("\nNumPy array comparison (1000 elements, pintrs vs pint)")
+    print("=" * 72)
+
+    pintrs_setup = (
+        "import numpy as np; "
+        "from pintrs import UnitRegistry; "
+        "ureg = UnitRegistry(); "
+        "arr = np.random.rand(1000); "
+        "q = ureg.Quantity(arr, 'meter')"
+    )
+
+    pint_setup = (
+        "import numpy as np; "
+        "from pint import UnitRegistry; "
+        "ureg = UnitRegistry(); "
+        "arr = np.random.rand(1000); "
+        "q = ureg.Quantity(arr, 'meter')"
+    )
+
+    numpy_setup = "import numpy as np; arr = np.random.rand(1000)"
+
+    ops = [
+        ("Create", "ureg.Quantity(arr, 'meter')"),
+        ("Convert (km)", "q.to('kilometer')"),
+        ("Add arrays", "q + q"),
+        ("Multiply scalar", "q * 2.0"),
+        ("Sum", "q.sum()"),
+    ]
+
+    print(f"  {'Operation':<30s} {'pintrs':>10s} {'pint':>10s} {'numpy':>10s} {'speedup':>8s}")
+    print("  " + "-" * 68)
+
+    numpy_stmts = {
+        "Create": "np.array(arr)",
+        "Convert (km)": "arr * 0.001",
+        "Add arrays": "arr + arr",
+        "Multiply scalar": "arr * 2.0",
+        "Sum": "arr.sum()",
+    }
+
+    for label, stmt in ops:
+        t_pintrs = min(timeit.repeat(stmt, setup=pintrs_setup, number=ITERATIONS, repeat=REPEAT))
+        t_pintrs_us = t_pintrs / ITERATIONS * 1e6
+        t_pint = min(timeit.repeat(stmt, setup=pint_setup, number=ITERATIONS, repeat=REPEAT))
+        t_pint_us = t_pint / ITERATIONS * 1e6
+        t_numpy = min(
+            timeit.repeat(numpy_stmts[label], setup=numpy_setup, number=ITERATIONS, repeat=REPEAT)
+        )
+        t_numpy_us = t_numpy / ITERATIONS * 1e6
+        speedup = t_pint_us / t_pintrs_us
+        print(
+            f"  {label:<30s} {t_pintrs_us:8.1f}us {t_pint_us:8.1f}us "
+            f"{t_numpy_us:8.1f}us {speedup:6.1f}x"
+        )
+
+
 def main() -> None:
     """Run all benchmarks."""
     print(f"Python {sys.version}")
@@ -293,6 +359,7 @@ def main() -> None:
         print("\npint not installed -- skipping comparison benchmarks")
 
     numpy_benchmarks()
+    numpy_pint_comparison()
 
 
 if __name__ == "__main__":

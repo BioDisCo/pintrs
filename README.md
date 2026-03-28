@@ -31,20 +31,27 @@ speed = (distance / time).to("m/s")
 
 Here's what you get for that one-line change. Measured with Python 3.12; run `python examples/benchmark.py` to reproduce.
 
+**Scalar operations:**
+
 | Operation | pintrs | pint | Speedup |
 |---|--:|--:|--:|
-| Quantity creation | 0.37 us | 3.33 us | **9x** |
-| Parse string (`"9.81 m/s**2"`) | 0.55 us | 50.21 us | **91x** |
-| Conversion (km -> m) | 0.94 us | 7.43 us | **8x** |
-| Conversion (km/h -> m/s) | 1.71 us | 13.30 us | **8x** |
-| Addition (same units) | 0.34 us | 4.64 us | **14x** |
-| Addition (compatible units) | 1.03 us | 11.56 us | **11x** |
-| Multiply by scalar | 0.25 us | 5.31 us | **21x** |
-| Multiply quantities | 0.38 us | 5.01 us | **13x** |
-| Comparison (>) | 0.12 us | 1.16 us | **10x** |
-| To base units | 0.37 us | 6.43 us | **17x** |
-| Parse units (`"kg * m / s ** 2"`) | 0.26 us | 38.85 us | **152x** |
-| String formatting | 0.44 us | 7.20 us | **16x** |
+| Parse expression | 0.6 us | 140 us | **219x** |
+| Conversion (`q.to("km")`) | 1.0 us | 46 us | **46x** |
+| Multiply by scalar | 0.3 us | 7.0 us | **25x** |
+| Quantity creation | 0.5 us | 7.7 us | **16x** |
+| To base units | 0.4 us | 3.4 us | **8x** |
+| Addition (same units) | 0.5 us | 4.5 us | **8x** |
+| Multiply quantities | 0.8 us | 5.5 us | **7x** |
+
+**NumPy arrays (1000 elements):**
+
+| Operation | pintrs | pint | Speedup |
+|---|--:|--:|--:|
+| Conversion (`arr.to("km")`) | 1.7 us | 48 us | **28x** |
+| Sum | 1.2 us | 23 us | **19x** |
+| Create | 1.2 us | 8.2 us | **7x** |
+| Multiply by scalar | 1.0 us | 6.9 us | **7x** |
+| Addition | 0.8 us | 5.4 us | **7x** |
 
 ## Something not working?
 

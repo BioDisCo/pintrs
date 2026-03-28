@@ -10,5 +10,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.25", features = ["extension-module"] }
+numpy = "0.25"
 indexmap = "2"
 once_cell = "1"

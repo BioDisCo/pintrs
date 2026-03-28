@@ -35,7 +35,14 @@ class _QuantityMeta(type):
         try:
             from pintrs.numpy_support import ArrayQuantity  # noqa: PLC0415
 
-            return type.__instancecheck__(ArrayQuantity, instance)
+            if type.__instancecheck__(ArrayQuantity, instance):
+                return True
+        except ImportError:
+            pass
+        try:
+            from pintrs._core import RustArrayQuantity  # noqa: PLC0415
+
+            return isinstance(instance, RustArrayQuantity)
         except ImportError:
             return False
 
@@ -45,7 +52,14 @@ class _QuantityMeta(type):
         try:
             from pintrs.numpy_support import ArrayQuantity  # noqa: PLC0415
 
-            return issubclass(subclass, ArrayQuantity)
+            if issubclass(subclass, ArrayQuantity):
+                return True
+        except (ImportError, TypeError):
+            pass
+        try:
+            from pintrs._core import RustArrayQuantity  # noqa: PLC0415
+
+            return issubclass(subclass, RustArrayQuantity)
         except (ImportError, TypeError):
             return False
 
@@ -76,13 +90,39 @@ from pintrs.definitions import (  # noqa: E402
 )
 from pintrs.group import Group, _build_builtin_groups  # noqa: E402
 from pintrs.logarithmic import LogarithmicQuantity  # noqa: E402
-from pintrs.numpy_support import ArrayQuantity  # noqa: E402
+from pintrs.numpy_support import ArrayQuantity as _PyArrayQuantity  # noqa: E402
 from pintrs.pandas_support import PintArray, PintDtype  # noqa: E402
 from pintrs.system import System  # noqa: E402
+
+try:
+    from pintrs._core import RustArrayQuantity as _RustArrayQuantity
+except ImportError:
+    _RustArrayQuantity = None  # type: ignore[assignment,misc]
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Any
+
+
+def _make_array_quantity(
+    magnitude: Any,
+    units: str,
+    registry: Any = None,
+) -> Any:
+    """Create an ArrayQuantity, using Rust for f64 1D arrays."""
+    if _RustArrayQuantity is not None:
+        try:
+            import numpy as np  # noqa: PLC0415
+
+            arr = np.asarray(magnitude, dtype=np.float64)
+            if arr.ndim == 1:
+                return _RustArrayQuantity(arr, units, registry)
+        except (TypeError, ValueError):
+            pass
+    return _PyArrayQuantity(magnitude, units, registry)
+
+
+ArrayQuantity = _PyArrayQuantity  # public name for isinstance checks
 
 __all__ = [
     "ArrayQuantity",
@@ -653,7 +693,7 @@ def make_quantity(
     """Create a Quantity, using ArrayQuantity for numpy arrays."""
     if _is_array_like(value) and ArrayQuantity is not None:
         units_str = units if units is not None else "dimensionless"
-        return ArrayQuantity(value, units_str, ureg)
+        return _make_array_quantity(value, units_str, ureg)
     return ureg.Quantity(value, units)
 
 
@@ -743,6 +783,41 @@ def _u_dimensionality_compat(self: Any) -> _Dimensionality:
 
 Unit.dimensionality = property(_u_dimensionality_compat)  # type: ignore[attr-defined,assignment]
 
+if _RustArrayQuantity is not None:
+    _original_raq_dimensionality = _RustArrayQuantity.dimensionality  # type: ignore[attr-defined,union-attr]
+
+    def _raq_dimensionality_compat(self: Any) -> _Dimensionality:
+        dim_str: str = _original_raq_dimensionality.__get__(self)  # type: ignore[misc]
+        return _parse_dimensionality(dim_str)
+
+    _RustArrayQuantity.dimensionality = property(_raq_dimensionality_compat)  # type: ignore[attr-defined,union-attr]
+    _RustArrayQuantity.__array_priority__ = 21  # type: ignore[attr-defined,union-attr]
+
+    def _raq_array_ufunc(
+        self: Any,  # noqa: ARG001  # self is in *inputs
+        ufunc: Any,
+        method: str,
+        *inputs: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Handle numpy ufuncs on RustArrayQuantity."""
+        if method != "__call__":
+            return NotImplemented
+        import numpy as _np  # noqa: PLC0415
+
+        # Convert RustArrayQuantity inputs to Python ArrayQuantity
+        converted = []
+        for inp in inputs:
+            if _RustArrayQuantity is not None and isinstance(inp, _RustArrayQuantity):
+                converted.append(
+                    _PyArrayQuantity(_np.asarray(inp.m), inp._units_str, inp._REGISTRY)
+                )
+            else:
+                converted.append(inp)
+        return converted[0].__array_ufunc__(ufunc, method, *converted, **kwargs)
+
+    _RustArrayQuantity.__array_ufunc__ = _raq_array_ufunc  # type: ignore[attr-defined,union-attr]
+
 
 def _q_REGISTRY(self: Any) -> UnitRegistry:  # noqa: N802
     return self._registry  # type: ignore[no-any-return]
@@ -765,7 +840,7 @@ def _unit_array_mul(self: Any, other: Any) -> Any:
     """Unit * array -> ArrayQuantity."""
     arr = _to_arr(other) if _np_cached is not None else None
     if arr is not None:
-        return ArrayQuantity(arr, str(self), self._registry)
+        return _make_array_quantity(arr, str(self), self._registry)
     return _original_unit_mul(self, other)
 
 
@@ -773,7 +848,7 @@ def _unit_array_rmul(self: Any, other: Any) -> Any:
     """array * Unit -> ArrayQuantity."""
     arr = _to_arr(other) if _np_cached is not None else None
     if arr is not None:
-        return ArrayQuantity(arr, str(self), self._registry)
+        return _make_array_quantity(arr, str(self), self._registry)
     return _original_unit_rmul(self, other)
 
 
@@ -785,7 +860,7 @@ def _unit_array_truediv(self: Any, other: Any) -> Any:
     """Unit / array -> ArrayQuantity."""
     arr = _to_arr(other) if _np_cached is not None else None
     if arr is not None:
-        return ArrayQuantity(1.0 / arr, str(self), self._registry)
+        return _make_array_quantity(1.0 / arr, str(self), self._registry)
     return _original_unit_truediv(self, other)
 
 
@@ -797,7 +872,7 @@ def _unit_array_rtruediv(self: Any, other: Any) -> Any:
     arr = _to_arr(other) if _np_cached is not None else None
     if arr is not None:
         inv_u = self**-1
-        return ArrayQuantity(arr, str(inv_u), self._registry)
+        return _make_array_quantity(arr, str(inv_u), self._registry)
     return _original_unit_rtruediv(self, other)
 
 
@@ -1306,10 +1381,12 @@ def _ureg_quantity(self: UnitRegistry, value: Any, units: Any = None) -> Any:  #
     if vtype is str:
         return self._scalar_quantity(value, None)
 
-    from pintrs.numpy_support import ArrayQuantity as _ArrayQuantity  # noqa: PLC0415
+    from pintrs.numpy_support import ArrayQuantity as _PyAQ  # noqa: PLC0415
 
-    # Quantity(ArrayQuantity, new_units) -> convert
-    if isinstance(value, _ArrayQuantity):
+    # Quantity(ArrayQuantity/RustArrayQuantity, new_units) -> convert
+    if isinstance(value, (_PyAQ,)) or (
+        _RustArrayQuantity is not None and isinstance(value, _RustArrayQuantity)
+    ):
         if units is not None:
             return value.to(str(units))
         return value
@@ -1325,7 +1402,7 @@ def _ureg_quantity(self: UnitRegistry, value: Any, units: Any = None) -> Any:  #
 
             units_str = str(units) if units is not None else "dimensionless"
             arr = np.asarray(value) if not isinstance(value, np.ndarray) else value
-            return _ArrayQuantity(arr, units_str, self)
+            return _make_array_quantity(arr, units_str, self)
         except ImportError:
             pass
 
@@ -1336,7 +1413,7 @@ def _ureg_quantity(self: UnitRegistry, value: Any, units: Any = None) -> Any:  #
             import numpy as np  # noqa: PLC0415
 
             units_str = str(units) if units is not None else "dimensionless"
-            return _ArrayQuantity(np.asarray(value), units_str, self)
+            return _make_array_quantity(np.asarray(value), units_str, self)
         except ImportError:
             pass
 
@@ -1354,7 +1431,6 @@ UnitRegistry.Quantity = _ureg_quantity  # type: ignore[attr-defined]
 
 # --- Class references on UnitRegistry ---
 
-UnitRegistry.Unit = Unit  # type: ignore[attr-defined,assignment]
 UnitRegistry.Context = Context  # type: ignore[attr-defined]
 UnitRegistry.Group = Group  # type: ignore[attr-defined]
 UnitRegistry.System = System  # type: ignore[attr-defined]
@@ -1567,11 +1643,11 @@ def _q_from_list(_cls: Any, lst: list[Any], units: str | None = None) -> Any:
         msg = "from_list requires numpy"
         raise ImportError(msg) from e
     if not lst:
-        return ArrayQuantity(np.array([]), units or "dimensionless")
+        return _make_array_quantity(np.array([]), units or "dimensionless")
     if units is None and hasattr(lst[0], "units"):
         units = str(lst[0].units)
     magnitudes = [q.to(units).magnitude if hasattr(q, "magnitude") else q for q in lst]
-    return ArrayQuantity(np.array(magnitudes), units or "dimensionless")
+    return _make_array_quantity(np.array(magnitudes), units or "dimensionless")
 
 
 def _q_from_sequence(cls: Any, seq: Any, units: str | None = None) -> Any:
@@ -1773,7 +1849,8 @@ def _q_array_mul(self: Any, other: Any) -> Any:
         return _original_q_mul(self, other)
     arr = _to_arr(other)
     if arr is not None:
-        return ArrayQuantity(arr * self.magnitude, str(self.units), self._registry)
+        mag = arr * self.magnitude
+        return _make_array_quantity(mag, str(self.units), self._registry)
     return _original_q_mul(self, other)
 
 
@@ -1782,7 +1859,8 @@ def _q_array_rmul(self: Any, other: Any) -> Any:
         return _original_q_rmul(self, other)
     arr = _to_arr(other)
     if arr is not None:
-        return ArrayQuantity(arr * self.magnitude, str(self.units), self._registry)
+        mag = arr * self.magnitude
+        return _make_array_quantity(mag, str(self.units), self._registry)
     return _original_q_rmul(self, other)
 
 
@@ -1800,7 +1878,8 @@ def _q_array_add(self: Any, other: Any) -> Any:
         return _original_q_add(self, other)
     arr = _to_arr(other)
     if arr is not None:
-        return ArrayQuantity(arr + self.magnitude, str(self.units), self._registry)
+        mag = arr + self.magnitude
+        return _make_array_quantity(mag, str(self.units), self._registry)
     return _original_q_add(self, other)
 
 
@@ -1811,7 +1890,8 @@ def _q_array_radd(self: Any, other: Any) -> Any:
         return _original_q_radd(self, other)
     arr = _to_arr(other)
     if arr is not None:
-        return ArrayQuantity(arr + self.magnitude, str(self.units), self._registry)
+        mag = arr + self.magnitude
+        return _make_array_quantity(mag, str(self.units), self._registry)
     return _original_q_radd(self, other)
 
 
@@ -1820,7 +1900,7 @@ def _q_array_sub(self: Any, other: Any) -> Any:
         return _original_q_sub(self, other)
     arr = _to_arr(other)
     if arr is not None:
-        return ArrayQuantity(
+        return _make_array_quantity(
             self.magnitude - arr,
             str(self.units),
             self._registry,
@@ -1833,7 +1913,7 @@ def _q_array_rsub(self: Any, other: Any) -> Any:
         return _original_q_rsub(self, other)
     arr = _to_arr(other)
     if arr is not None:
-        return ArrayQuantity(
+        return _make_array_quantity(
             arr - self.magnitude,
             str(self.units),
             self._registry,
@@ -1846,7 +1926,7 @@ def _q_array_truediv(self: Any, other: Any) -> Any:
         return _original_q_truediv(self, other)
     arr = _to_arr(other)
     if arr is not None:
-        return ArrayQuantity(
+        return _make_array_quantity(
             self.magnitude / arr,
             str(self.units),
             self._registry,
@@ -1860,7 +1940,7 @@ def _q_array_rtruediv(self: Any, other: Any) -> Any:
     arr = _to_arr(other)
     if arr is not None:
         inv_units = str(self._registry.Unit("dimensionless") / self.units)
-        return ArrayQuantity(arr / self.magnitude, inv_units, self._registry)
+        return _make_array_quantity(arr / self.magnitude, inv_units, self._registry)
     return _original_q_rtruediv(self, other)
 
 

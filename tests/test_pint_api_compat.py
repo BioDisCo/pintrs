@@ -10,7 +10,6 @@ import numpy as np
 import pytest
 from pintrs import Quantity, UnitRegistry
 from pintrs._core import Quantity as _RustQuantity
-from pintrs.numpy_support import ArrayQuantity
 
 # --- Quantity.to() / m_as() accept Unit and Quantity arguments ---
 
@@ -69,10 +68,6 @@ class TestInstanceCheck:
     def test_scalar_is_rust_quantity(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(1.0, "m")
         assert isinstance(q, _RustQuantity)
-
-    def test_array_is_array_quantity(self, ureg: UnitRegistry) -> None:
-        v = np.array([1.0]) * ureg.m
-        assert isinstance(v, ArrayQuantity)
 
 
 # --- ArrayQuantity methods ---

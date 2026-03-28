@@ -1,3 +1,4 @@
+mod array_quantity;
 mod definition;
 mod errors;
 mod parser;
@@ -14,7 +15,7 @@ use errors::PintError;
 use registry::UnitRegistry as RustRegistry;
 use units_container::UnitsContainer;
 
-type SharedRegistry = Arc<Mutex<RustRegistry>>;
+pub(crate) type SharedRegistry = Arc<Mutex<RustRegistry>>;
 
 // --- Custom exception types ---
 
@@ -55,7 +56,7 @@ pyo3::create_exception!(
     "Raised when redefining an existing unit."
 );
 
-fn to_py_err(e: Box<PintError>) -> PyErr {
+pub(crate) fn to_py_err(e: Box<PintError>) -> PyErr {
     match *e {
         PintError::DimensionalityError { .. } => DimensionalityError::new_err(e.to_string()),
         PintError::UndefinedUnitError { .. } => UndefinedUnitError::new_err(e.to_string()),
@@ -70,8 +71,8 @@ fn to_py_err(e: Box<PintError>) -> PyErr {
 // --- UnitRegistry ---
 
 #[pyclass(name = "UnitRegistry", module = "pintrs._core", subclass)]
-struct PyUnitRegistry {
-    inner: SharedRegistry,
+pub(crate) struct PyUnitRegistry {
+    pub(crate) inner: SharedRegistry,
     #[pyo3(get)]
     _init_kwargs: Option<PyObject>,
 }
@@ -442,13 +443,13 @@ impl PyUnitRegistry {
 // --- Quantity ---
 
 #[pyclass(name = "Quantity", module = "pintrs._core", subclass, dict)]
-struct PyQuantity {
-    magnitude: f64,
-    units: UnitsContainer,
-    registry: SharedRegistry,
-    cached_dim: OnceCell<String>,
+pub(crate) struct PyQuantity {
+    pub(crate) magnitude: f64,
+    pub(crate) units: UnitsContainer,
+    pub(crate) registry: SharedRegistry,
+    pub(crate) cached_dim: OnceCell<String>,
     /// Cached Python-level registry wrapper (for `_REGISTRY is ureg` identity).
-    cached_registry_obj: OnceCell<PyObject>,
+    pub(crate) cached_registry_obj: OnceCell<PyObject>,
 }
 
 impl Clone for PyQuantity {
@@ -1623,10 +1624,10 @@ impl PyQuantity {
 // --- Unit ---
 
 #[pyclass(name = "Unit", module = "pintrs._core", subclass)]
-struct PyUnit {
-    units: UnitsContainer,
-    registry: SharedRegistry,
-    cached_registry_obj: OnceCell<PyObject>,
+pub(crate) struct PyUnit {
+    pub(crate) units: UnitsContainer,
+    pub(crate) registry: SharedRegistry,
+    pub(crate) cached_registry_obj: OnceCell<PyObject>,
 }
 
 impl Clone for PyUnit {
@@ -1864,7 +1865,7 @@ impl PyUnit {
 // --- helpers ---
 
 /// Extract a unit string from a Python object that can be a str, Unit, or Quantity.
-fn extract_units_string(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+pub(crate) fn extract_units_string(obj: &Bound<'_, PyAny>) -> PyResult<String> {
     if let Ok(s) = obj.extract::<String>() {
         return Ok(s);
     }
@@ -1929,6 +1930,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUnitRegistry>()?;
     m.add_class::<PyQuantity>()?;
     m.add_class::<PyUnit>()?;
+    m.add_class::<array_quantity::PyArrayQuantity>()?;
 
     // Exception types
     m.add("PintError", m.py().get_type::<PintError_Py>())?;
