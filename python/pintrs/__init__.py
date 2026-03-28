@@ -15,22 +15,70 @@ from pintrs._core import (
     DimensionalityError,
     OffsetUnitCalculusError,
     PintError,
-    Quantity,
     RedefinitionError,
     UndefinedUnitError,
     Unit,
     UnitRegistry,
 )
+from pintrs._core import (
+    Quantity as _RustQuantity,
+)
 from pintrs.context import ActiveContexts, Context
-from pintrs.definitions import (
+
+
+class _QuantityMeta(type):
+    """Metaclass that makes isinstance(array_quantity, Quantity) return True."""
+
+    def __instancecheck__(cls, instance: object) -> bool:
+        if isinstance(instance, _RustQuantity):
+            return True
+        try:
+            from pintrs.numpy_support import ArrayQuantity  # noqa: PLC0415
+
+            return type.__instancecheck__(ArrayQuantity, instance)
+        except ImportError:
+            return False
+
+    def __subclasscheck__(cls, subclass: type) -> bool:
+        if issubclass(subclass, _RustQuantity):
+            return True
+        try:
+            from pintrs.numpy_support import ArrayQuantity  # noqa: PLC0415
+
+            return issubclass(subclass, ArrayQuantity)
+        except (ImportError, TypeError):
+            return False
+
+    def __getattr__(cls, name: str) -> Any:
+        return getattr(_RustQuantity, name)
+
+
+class Quantity(metaclass=_QuantityMeta):  # type: ignore[misc]
+    """Proxy for isinstance checks that includes both scalar and array quantities.
+
+    Do not instantiate directly; use UnitRegistry.Quantity() instead.
+    Delegates attribute access to _RustQuantity for compatibility.
+    """
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
+        return _RustQuantity(*args, **kwargs)
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        pass
+
+    def __class_getitem__(cls, item: Any) -> Any:
+        return cls
+
+
+from pintrs.definitions import (  # noqa: E402
     build_groups_from_definitions,
     build_systems_from_definitions,
 )
-from pintrs.group import Group, _build_builtin_groups
-from pintrs.logarithmic import LogarithmicQuantity
-from pintrs.numpy_support import ArrayQuantity
-from pintrs.pandas_support import PintArray, PintDtype
-from pintrs.system import System
+from pintrs.group import Group, _build_builtin_groups  # noqa: E402
+from pintrs.logarithmic import LogarithmicQuantity  # noqa: E402
+from pintrs.numpy_support import ArrayQuantity  # noqa: E402
+from pintrs.pandas_support import PintArray, PintDtype  # noqa: E402
+from pintrs.system import System  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -60,7 +108,7 @@ __all__ = [
     "set_application_registry",
     "wraps",
 ]
-from importlib.metadata import version as _metadata_version
+from importlib.metadata import version as _metadata_version  # noqa: E402
 
 __version__ = _metadata_version("pintrs")
 sys.modules.setdefault("_core", _core_module)
@@ -84,6 +132,41 @@ def get_application_registry() -> UnitRegistry:
         _application_registry = UnitRegistry()
         _ensure_registry_initialized(_application_registry)
     return _application_registry
+
+
+# --- UnitRegistry.__call__ and parse_expression with preprocessors ---
+
+
+_original_parse_expression = UnitRegistry.parse_expression
+_original_parse_units = UnitRegistry.parse_units
+
+
+def _ureg_parse_expression_with_preprocessors(self: Any, expr: str) -> Any:
+    """Apply preprocessors before parsing."""
+    cfg = _get_config(self)
+    for preprocessor in cfg.get("preprocessors", []):
+        expr = preprocessor(expr)
+    return _original_parse_expression(self, expr)
+
+
+def _ureg_parse_units_with_preprocessors(self: Any, expr: str) -> Any:
+    """Apply preprocessors before parsing units."""
+    cfg = _get_config(self)
+    for preprocessor in cfg.get("preprocessors", []):
+        expr = preprocessor(expr)
+    return _original_parse_units(self, expr)
+
+
+UnitRegistry.parse_expression = _ureg_parse_expression_with_preprocessors  # type: ignore[attr-defined,assignment]
+UnitRegistry.parse_units = _ureg_parse_units_with_preprocessors  # type: ignore[attr-defined,assignment]
+
+
+def _ureg_call(self: Any, input_string: str, **kwargs: Any) -> Any:
+    """Make UnitRegistry callable: ureg('m/s') -> parse_expression('m/s')."""
+    return self.parse_expression(input_string, **kwargs)
+
+
+UnitRegistry.__call__ = _ureg_call  # type: ignore[attr-defined]
 
 
 # --- Decorators ---
@@ -235,7 +318,7 @@ class GenericQuantity:
             return bool(scalar.is_compatible_with(other))
         if isinstance(other, GenericQuantity):
             return bool(scalar.is_compatible_with(other._units_str))
-        return bool(scalar.is_compatible_with(other))
+        return bool(scalar.is_compatible_with(other))  # pyright: ignore[reportArgumentType]
 
     def __add__(self, other: Any) -> GenericQuantity:
         if isinstance(other, GenericQuantity):
@@ -458,13 +541,13 @@ class Measurement:
 
     def __add__(self, other: Measurement | Quantity | float) -> Measurement:
         if isinstance(other, Measurement):
-            new_val = self._value + other._value
+            new_val = self._value + other._value  # pyright: ignore[reportOperatorIssue]
             new_err = (self._error**2 + other._error**2) ** 0.5
             return Measurement(new_val, new_err)
         if isinstance(other, Quantity):
-            return Measurement(self._value + other, self._error)
+            return Measurement(self._value + other, self._error)  # pyright: ignore[reportOperatorIssue]
         if isinstance(other, (int, float)):
-            return Measurement(self._value + other, self._error)
+            return Measurement(self._value + other, self._error)  # pyright: ignore[reportOperatorIssue]
         return NotImplemented
 
     def __radd__(self, other: Quantity | float) -> Measurement:
@@ -472,30 +555,30 @@ class Measurement:
 
     def __sub__(self, other: Measurement | Quantity | float) -> Measurement:
         if isinstance(other, Measurement):
-            new_val = self._value - other._value
+            new_val = self._value - other._value  # pyright: ignore[reportOperatorIssue]
             new_err = (self._error**2 + other._error**2) ** 0.5
             return Measurement(new_val, new_err)
         if isinstance(other, Quantity):
-            return Measurement(self._value - other, self._error)
+            return Measurement(self._value - other, self._error)  # pyright: ignore[reportOperatorIssue]
         if isinstance(other, (int, float)):
-            return Measurement(self._value - other, self._error)
+            return Measurement(self._value - other, self._error)  # pyright: ignore[reportOperatorIssue]
         return NotImplemented
 
     def __rsub__(self, other: Quantity | float) -> Measurement:
         if isinstance(other, Quantity):
-            return Measurement(other - self._value, self._error)
+            return Measurement(other - self._value, self._error)  # pyright: ignore[reportOperatorIssue]
         if isinstance(other, (int, float)):
-            return Measurement(other - self._value, self._error)
+            return Measurement(other - self._value, self._error)  # pyright: ignore[reportOperatorIssue]
         return NotImplemented
 
     def __mul__(self, other: Measurement | float) -> Measurement:
         if isinstance(other, Measurement):
-            new_val = self._value * other._value
+            new_val = self._value * other._value  # pyright: ignore[reportOperatorIssue]
             rel_err = (self.rel**2 + other.rel**2) ** 0.5
             new_err = abs(new_val.magnitude) * rel_err
             return Measurement(new_val, new_err)
         if isinstance(other, (int, float)):
-            return Measurement(self._value * other, self._error * abs(other))
+            return Measurement(self._value * other, self._error * abs(other))  # pyright: ignore[reportOperatorIssue]
         return NotImplemented
 
     def __rmul__(self, other: float) -> Measurement:
@@ -503,17 +586,17 @@ class Measurement:
 
     def __truediv__(self, other: Measurement | float) -> Measurement:
         if isinstance(other, Measurement):
-            new_val = self._value / other._value
+            new_val = self._value / other._value  # pyright: ignore[reportOperatorIssue]
             rel_err = (self.rel**2 + other.rel**2) ** 0.5
             new_err = abs(new_val.magnitude) * rel_err
             return Measurement(new_val, new_err)
         if isinstance(other, (int, float)):
-            return Measurement(self._value / other, self._error / abs(other))
+            return Measurement(self._value / other, self._error / abs(other))  # pyright: ignore[reportOperatorIssue]
         return NotImplemented
 
     def __rtruediv__(self, other: float) -> Measurement:
         if isinstance(other, (int, float)):
-            new_val = other / self._value
+            new_val = other / self._value  # pyright: ignore[reportOperatorIssue]
             new_err = abs(new_val.magnitude) * self.rel
             return Measurement(new_val, new_err)
         return NotImplemented
@@ -596,7 +679,7 @@ class _Dimensionality(dict):  # type: ignore[type-arg]
         else:
             num, den = normalized, ""
         for part in num.split("*"):
-            if not part or part == "1":
+            if not part or part in ("1", "[]"):
                 continue
             if "^" in part:
                 name, exp = part.split("^", 1)
@@ -640,7 +723,7 @@ def _parse_dimensionality(dim_string: str) -> _Dimensionality:
     return _Dimensionality(dim_string)
 
 
-_original_q_dimensionality = Quantity.dimensionality  # type: ignore[attr-defined]
+_original_q_dimensionality = _RustQuantity.dimensionality  # type: ignore[attr-defined]
 
 
 def _q_dimensionality_compat(self: Any) -> _Dimensionality:
@@ -648,7 +731,7 @@ def _q_dimensionality_compat(self: Any) -> _Dimensionality:
     return _parse_dimensionality(dim_str)
 
 
-Quantity.dimensionality = property(_q_dimensionality_compat)  # type: ignore[attr-defined,assignment]
+_RustQuantity.dimensionality = property(_q_dimensionality_compat)  # type: ignore[attr-defined,assignment]
 
 _original_u_dimensionality = Unit.dimensionality  # type: ignore[attr-defined]
 
@@ -665,7 +748,7 @@ def _q_REGISTRY(self: Any) -> UnitRegistry:  # noqa: N802
     return self._registry  # type: ignore[no-any-return]
 
 
-Quantity._REGISTRY = property(_q_REGISTRY)  # type: ignore[attr-defined]
+_RustQuantity._REGISTRY = property(_q_REGISTRY)  # type: ignore[attr-defined]
 
 
 def _u_REGISTRY(self: Any) -> UnitRegistry:  # noqa: N802
@@ -673,6 +756,56 @@ def _u_REGISTRY(self: Any) -> UnitRegistry:  # noqa: N802
 
 
 Unit._REGISTRY = property(_u_REGISTRY)  # type: ignore[attr-defined]
+
+_original_unit_mul = Unit.__mul__
+_original_unit_rmul = Unit.__rmul__
+
+
+def _unit_array_mul(self: Any, other: Any) -> Any:
+    """Unit * array -> ArrayQuantity."""
+    arr = _to_arr(other) if _np_cached is not None else None
+    if arr is not None:
+        return ArrayQuantity(arr, str(self), self._registry)
+    return _original_unit_mul(self, other)
+
+
+def _unit_array_rmul(self: Any, other: Any) -> Any:
+    """array * Unit -> ArrayQuantity."""
+    arr = _to_arr(other) if _np_cached is not None else None
+    if arr is not None:
+        return ArrayQuantity(arr, str(self), self._registry)
+    return _original_unit_rmul(self, other)
+
+
+_original_unit_truediv = Unit.__truediv__
+_original_unit_rtruediv = Unit.__rtruediv__
+
+
+def _unit_array_truediv(self: Any, other: Any) -> Any:
+    """Unit / array -> ArrayQuantity."""
+    arr = _to_arr(other) if _np_cached is not None else None
+    if arr is not None:
+        return ArrayQuantity(1.0 / arr, str(self), self._registry)
+    return _original_unit_truediv(self, other)
+
+
+def _unit_array_rtruediv(self: Any, other: Any) -> Any:
+    """number / Unit -> Quantity, array / Unit -> ArrayQuantity."""
+    if isinstance(other, (int, float)):
+        inv_units = self**-1
+        return _RustQuantity(other, str(inv_units))
+    arr = _to_arr(other) if _np_cached is not None else None
+    if arr is not None:
+        inv_u = self**-1
+        return ArrayQuantity(arr, str(inv_u), self._registry)
+    return _original_unit_rtruediv(self, other)
+
+
+Unit.__mul__ = _unit_array_mul  # type: ignore[attr-defined,assignment]
+Unit.__rmul__ = _unit_array_rmul  # type: ignore[attr-defined,assignment]
+Unit.__truediv__ = _unit_array_truediv  # type: ignore[attr-defined,assignment]
+Unit.__rtruediv__ = _unit_array_rtruediv  # type: ignore[attr-defined,assignment]
+Unit.__array_priority__ = 22  # type: ignore[attr-defined]  # higher than ndarray (0) and Quantity (21)
 
 
 _original_get_dimensionality = UnitRegistry.get_dimensionality
@@ -715,7 +848,7 @@ def _ureg_measurement(
         q = self.Quantity(value, units)
     else:
         q = self.Quantity(value, "dimensionless")
-    return Measurement(q, error)
+    return Measurement(q, error)  # pyright: ignore[reportArgumentType]
 
 
 def _ureg_setup_matplotlib(
@@ -987,7 +1120,7 @@ def _null_space(
 
 # --- Context-aware conversion on Quantity ---
 
-_original_quantity_to = Quantity.to
+_original_quantity_to = _RustQuantity.to
 
 # Thread-local storage for the active registry+contexts during context blocks
 import threading  # noqa: E402
@@ -1000,7 +1133,7 @@ def _get_context_registry() -> tuple[UnitRegistry, ActiveContexts] | None:
     return getattr(_context_state, "current", None)
 
 
-def _quantity_to_with_context(self: Any, units: str) -> Any:
+def _quantity_to_with_context(self: Any, units: Any, *_contexts: Any) -> Any:
     """Quantity.to() that falls back to active context transformations."""
     try:
         return _original_quantity_to(self, units)
@@ -1040,7 +1173,7 @@ def _base_unit_for_dim(dim: str) -> str:
     return mapping.get(dim, "dimensionless")
 
 
-Quantity.to = _quantity_to_with_context  # type: ignore[attr-defined,assignment]
+_RustQuantity.to = _quantity_to_with_context  # type: ignore[attr-defined,assignment]
 
 # Attach methods to UnitRegistry
 UnitRegistry.wraps = _ureg_wraps  # type: ignore[attr-defined]
@@ -1193,7 +1326,7 @@ def _ureg_quantity(self: UnitRegistry, value: Any, units: Any = None) -> Any:  #
             units_str = str(units) if units is not None else "dimensionless"
             arr = np.asarray(value) if not isinstance(value, np.ndarray) else value
             return _ArrayQuantity(arr, units_str, self)
-        except (ImportError, TypeError, ValueError):
+        except ImportError:
             pass
 
     # force_ndarray: wrap scalar in 0-d array
@@ -1204,7 +1337,7 @@ def _ureg_quantity(self: UnitRegistry, value: Any, units: Any = None) -> Any:  #
 
             units_str = str(units) if units is not None else "dimensionless"
             return _ArrayQuantity(np.asarray(value), units_str, self)
-        except (ImportError, TypeError, ValueError):
+        except ImportError:
             pass
 
     # non_int_type: preserve Decimal/Fraction magnitudes
@@ -1221,6 +1354,7 @@ UnitRegistry.Quantity = _ureg_quantity  # type: ignore[attr-defined]
 
 # --- Class references on UnitRegistry ---
 
+UnitRegistry.Unit = Unit  # type: ignore[attr-defined,assignment]
 UnitRegistry.Context = Context  # type: ignore[attr-defined]
 UnitRegistry.Group = Group  # type: ignore[attr-defined]
 UnitRegistry.System = System  # type: ignore[attr-defined]
@@ -1329,15 +1463,15 @@ def _q_transpose(self: Any) -> Any:
     return self
 
 
-Quantity.ndim = property(_q_ndim)  # type: ignore[attr-defined,assignment]
-Quantity.shape = property(_q_shape)  # type: ignore[attr-defined,assignment]
-Quantity.dtype = property(_q_dtype)  # type: ignore[attr-defined,assignment]
-Quantity.real = property(_q_real)  # type: ignore[attr-defined,assignment]
-Quantity.imag = property(_q_imag)  # type: ignore[attr-defined,assignment]
-Quantity.T = property(_q_transpose)  # type: ignore[attr-defined,assignment]
-Quantity.force_ndarray = False  # type: ignore[attr-defined]
-Quantity.force_ndarray_like = False  # type: ignore[attr-defined]
-Quantity.__array_priority__ = 21  # type: ignore[attr-defined]  # higher than ndarray (0)
+_RustQuantity.ndim = property(_q_ndim)  # type: ignore[attr-defined,assignment]
+_RustQuantity.shape = property(_q_shape)  # type: ignore[attr-defined,assignment]
+_RustQuantity.dtype = property(_q_dtype)  # type: ignore[attr-defined,assignment]
+_RustQuantity.real = property(_q_real)  # type: ignore[attr-defined,assignment]
+_RustQuantity.imag = property(_q_imag)  # type: ignore[attr-defined,assignment]
+_RustQuantity.T = property(_q_transpose)  # type: ignore[attr-defined,assignment]
+_RustQuantity.force_ndarray = False  # type: ignore[attr-defined]
+_RustQuantity.force_ndarray_like = False  # type: ignore[attr-defined]
+_RustQuantity.__array_priority__ = 21  # type: ignore[attr-defined]  # higher than ndarray (0)
 
 
 def _q_clip(self: Any, min: Any = None, max: Any = None) -> Any:  # noqa: A002
@@ -1445,16 +1579,16 @@ def _q_from_sequence(cls: Any, seq: Any, units: str | None = None) -> Any:
     return _q_from_list(cls, list(seq), units)
 
 
-Quantity.clip = _q_clip  # type: ignore[attr-defined]
-Quantity.dot = _q_dot  # type: ignore[attr-defined]
-Quantity.prod = _q_prod  # type: ignore[attr-defined]
-Quantity.fill = _q_fill  # type: ignore[attr-defined]
-Quantity.flat = property(_q_flat)  # type: ignore[attr-defined,assignment]
-Quantity.put = _q_put  # type: ignore[attr-defined]
-Quantity.searchsorted = _q_searchsorted  # type: ignore[attr-defined]
-Quantity.tolist = _q_tolist  # type: ignore[attr-defined]
-Quantity.from_list = classmethod(_q_from_list)  # type: ignore[attr-defined,arg-type]
-Quantity.from_sequence = classmethod(_q_from_sequence)  # type: ignore[attr-defined,arg-type]
+_RustQuantity.clip = _q_clip  # type: ignore[attr-defined]
+_RustQuantity.dot = _q_dot  # type: ignore[attr-defined]
+_RustQuantity.prod = _q_prod  # type: ignore[attr-defined]
+_RustQuantity.fill = _q_fill  # type: ignore[attr-defined]
+_RustQuantity.flat = property(_q_flat)  # type: ignore[attr-defined,assignment]
+_RustQuantity.put = _q_put  # type: ignore[attr-defined]
+_RustQuantity.searchsorted = _q_searchsorted  # type: ignore[attr-defined]
+_RustQuantity.tolist = _q_tolist  # type: ignore[attr-defined]
+_RustQuantity.from_list = classmethod(_q_from_list)  # type: ignore[attr-defined,arg-type]
+_RustQuantity.from_sequence = classmethod(_q_from_sequence)  # type: ignore[attr-defined,arg-type]
 
 
 # --- Quantity: dask stubs ---
@@ -1485,18 +1619,24 @@ def _q_visualize(self: Any, **kwargs: Any) -> Any:
     raise AttributeError(msg)
 
 
-Quantity.UnitsContainer = _ureg_parse_units_as_container  # type: ignore[attr-defined]
-Quantity.compute = _q_compute  # type: ignore[attr-defined]
-Quantity.persist = _q_persist  # type: ignore[attr-defined]
-Quantity.visualize = _q_visualize  # type: ignore[attr-defined]
+_RustQuantity.UnitsContainer = _ureg_parse_units_as_container  # type: ignore[attr-defined]
+_RustQuantity.compute = _q_compute  # type: ignore[attr-defined]
+_RustQuantity.persist = _q_persist  # type: ignore[attr-defined]
+_RustQuantity.visualize = _q_visualize  # type: ignore[attr-defined]
 
 
 def _ureg_define(self: UnitRegistry, definition: str) -> None:
-    """Validate obvious invalid/redefinition cases before delegating to Rust."""
+    """Define a unit, tolerating redefinition like pint does."""
     stripped = definition.strip()
     if not stripped or stripped.startswith("="):
         msg = f"Invalid definition syntax: {definition!r}"
         raise DefinitionSyntaxError(msg)
+
+    # Handle @alias directives
+    if stripped.startswith("@alias"):
+        _ureg_define_alias(self, stripped)
+        return
+
     name, sep, _rest = stripped.partition("=")
     if not sep:
         msg = f"Invalid definition syntax: {definition!r}"
@@ -1506,9 +1646,21 @@ def _ureg_define(self: UnitRegistry, definition: str) -> None:
         msg = f"Invalid definition syntax: {definition!r}"
         raise DefinitionSyntaxError(msg)
     if unit_name in self:
-        msg = f"Cannot redefine {unit_name!r}"
-        raise RedefinitionError(msg)
+        return  # silently skip redefinition (pint compat)
     _original_define(self, definition)
+
+
+def _ureg_define_alias(self: UnitRegistry, definition: str) -> None:
+    """Handle @alias directives like '@alias meter = gpm'."""
+    parts = definition.replace("@alias", "").strip().split("=")
+    if len(parts) < 2:  # noqa: PLR2004
+        return
+    base_name = parts[0].strip()
+    for raw_alias in parts[1:]:
+        alias = raw_alias.strip()
+        if alias and base_name in self:
+            with contextlib.suppress(RedefinitionError, Exception):
+                _original_define(self, f"{alias} = {base_name}")
 
 
 UnitRegistry.define = _ureg_define  # type: ignore[attr-defined,assignment]
@@ -1545,7 +1697,7 @@ def _unit_format_babel(self: Any, locale: str = "en") -> str:  # noqa: ARG001
     return str(self)
 
 
-Quantity.format_babel = _quantity_format_babel  # type: ignore[attr-defined]
+_RustQuantity.format_babel = _quantity_format_babel  # type: ignore[attr-defined]
 Unit.format_babel = _unit_format_babel  # type: ignore[attr-defined]
 
 # --- Formatting modes ---
@@ -1566,7 +1718,7 @@ def _unit_format(self: Any, spec: str) -> str:
     return _format_unit(self, spec)
 
 
-Quantity.__format__ = _quantity_format  # type: ignore[attr-defined,assignment]
+_RustQuantity.__format__ = _quantity_format  # type: ignore[attr-defined,assignment]
 Unit.__format__ = _unit_format  # type: ignore[attr-defined,assignment]
 
 
@@ -1589,14 +1741,14 @@ Unit.systems = property(_unit_systems)  # type: ignore[attr-defined,assignment]
 # Fast scalar types that should go straight to Rust
 _SCALAR_TYPES = (int, float, Quantity)
 
-_original_q_mul = Quantity.__mul__
-_original_q_rmul = Quantity.__rmul__
-_original_q_add = Quantity.__add__
-_original_q_radd = Quantity.__radd__
-_original_q_sub = Quantity.__sub__
-_original_q_rsub = Quantity.__rsub__
-_original_q_truediv = Quantity.__truediv__
-_original_q_rtruediv = Quantity.__rtruediv__
+_original_q_mul = _RustQuantity.__mul__
+_original_q_rmul = _RustQuantity.__rmul__
+_original_q_add = _RustQuantity.__add__
+_original_q_radd = _RustQuantity.__radd__
+_original_q_sub = _RustQuantity.__sub__
+_original_q_rsub = _RustQuantity.__rsub__
+_original_q_truediv = _RustQuantity.__truediv__
+_original_q_rtruediv = _RustQuantity.__rtruediv__
 
 # Cache numpy at module level
 try:
@@ -1634,8 +1786,17 @@ def _q_array_rmul(self: Any, other: Any) -> Any:
     return _original_q_rmul(self, other)
 
 
+def _is_nan(v: Any) -> bool:
+    try:
+        return v != v  # NaN != NaN  # noqa: PLR0124
+    except Exception:
+        return False
+
+
 def _q_array_add(self: Any, other: Any) -> Any:
     if type(other) in _SCALAR_TYPES:
+        if _is_nan(other):
+            return _RustQuantity(float("nan"), str(self.units))
         return _original_q_add(self, other)
     arr = _to_arr(other)
     if arr is not None:
@@ -1645,6 +1806,8 @@ def _q_array_add(self: Any, other: Any) -> Any:
 
 def _q_array_radd(self: Any, other: Any) -> Any:
     if type(other) in _SCALAR_TYPES:
+        if _is_nan(other):
+            return _RustQuantity(float("nan"), str(self.units))
         return _original_q_radd(self, other)
     arr = _to_arr(other)
     if arr is not None:
@@ -1701,11 +1864,11 @@ def _q_array_rtruediv(self: Any, other: Any) -> Any:
     return _original_q_rtruediv(self, other)
 
 
-Quantity.__mul__ = _q_array_mul  # type: ignore[attr-defined,assignment]
-Quantity.__rmul__ = _q_array_rmul  # type: ignore[attr-defined,assignment]
-Quantity.__add__ = _q_array_add  # type: ignore[attr-defined,assignment]
-Quantity.__radd__ = _q_array_radd  # type: ignore[attr-defined,assignment]
-Quantity.__sub__ = _q_array_sub  # type: ignore[attr-defined,assignment]
-Quantity.__rsub__ = _q_array_rsub  # type: ignore[attr-defined,assignment]
-Quantity.__truediv__ = _q_array_truediv  # type: ignore[attr-defined,assignment]
-Quantity.__rtruediv__ = _q_array_rtruediv  # type: ignore[attr-defined,assignment]
+_RustQuantity.__mul__ = _q_array_mul  # type: ignore[attr-defined,assignment]
+_RustQuantity.__rmul__ = _q_array_rmul  # type: ignore[attr-defined,assignment]
+_RustQuantity.__add__ = _q_array_add  # type: ignore[attr-defined,assignment]
+_RustQuantity.__radd__ = _q_array_radd  # type: ignore[attr-defined,assignment]
+_RustQuantity.__sub__ = _q_array_sub  # type: ignore[attr-defined,assignment]
+_RustQuantity.__rsub__ = _q_array_rsub  # type: ignore[attr-defined,assignment]
+_RustQuantity.__truediv__ = _q_array_truediv  # type: ignore[attr-defined,assignment]
+_RustQuantity.__rtruediv__ = _q_array_rtruediv  # type: ignore[attr-defined,assignment]

@@ -241,7 +241,8 @@ class TestAnonymousContext:
         assert c.name == ""
 
     def test_anonymous_context_not_in_registry(self) -> None:
-        c = Context()
+        Context._REGISTRY.pop("", None)  # clean slate
+        _ = Context()
         assert Context.get("") is None
 
     def test_anonymous_context_with_ureg_context(self, ureg: UnitRegistry) -> None:

@@ -12,6 +12,7 @@ from pintrs import (
     PintError,
     Quantity,
     UndefinedUnitError,
+    Unit,
     UnitRegistry,
     check,
     wraps,
@@ -90,9 +91,9 @@ class TestRegistryFeatures:
         assert abs(q.magnitude - 9.8) < 1e-10
 
     def test_getattr_unit(self, ureg: UnitRegistry) -> None:
-        q = ureg.meter
-        assert q.magnitude == 1.0
-        assert str(q.units) == "m"
+        u = ureg.meter
+        assert isinstance(u, Unit)
+        assert str(u) == "m"
 
     def test_get_compatible_units(self, ureg: UnitRegistry) -> None:
         units = ureg.get_compatible_units("meter")

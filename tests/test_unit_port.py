@@ -87,10 +87,10 @@ class TestUnitCreation:
         u = ureg.parse_units("meter")
         assert type(u).__name__ == "Unit"
 
-    def test_getattr_returns_quantity(self, ureg: UnitRegistry) -> None:
-        q = ureg.meter
-        assert type(q).__name__ == "Quantity"
-        assert q.magnitude == pytest.approx(1.0)
+    def test_getattr_returns_unit(self, ureg: UnitRegistry) -> None:
+        u = ureg.meter
+        assert type(u).__name__ == "Unit"
+        assert str(u) == "m"
 
 
 # ---------------------------------------------------------------------------

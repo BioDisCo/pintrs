@@ -841,6 +841,9 @@ impl UnitRegistry {
     /// Check if a unit name is known to the registry
     #[inline]
     pub fn is_known_unit(&self, name: &str) -> bool {
+        if name == "dimensionless" {
+            return true;
+        }
         if self.name_map.contains_key(name) {
             return true;
         }

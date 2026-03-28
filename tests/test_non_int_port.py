@@ -294,7 +294,7 @@ class TestContextAndSymbol:
     """Test ureg attribute access and unit symbol equivalence."""
 
     def test_context_attr(self, ureg: UnitRegistry, non_int_type: NonIntType) -> None:
-        assert ureg.meter == _q("1", "meter", non_int_type)
+        assert ureg.meter == ureg.Unit("meter")
 
     def test_symbol_ms(self, ureg: UnitRegistry, non_int_type: NonIntType) -> None:
         assert _q("2", "ms", non_int_type) == _q("2", "millisecond", non_int_type)

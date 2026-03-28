@@ -8,7 +8,7 @@ __array_ufunc__ for transparent numpy integration.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -29,6 +29,7 @@ except ImportError:
 
 if has_numpy:
     from pintrs._core import Quantity as ScalarQuantity
+    from pintrs._core import Unit as _Unit
     from pintrs._core import UnitRegistry as _UnitRegistry
 
     class ArrayQuantity:
@@ -68,8 +69,8 @@ if has_numpy:
             return self._unit_obj
 
         @property
-        def dimensionality(self) -> str:
-            return str(self._unit_obj.dimensionality)
+        def dimensionality(self) -> Any:
+            return self._unit_obj.dimensionality
 
         @property
         def dimensionless(self) -> bool:
@@ -78,6 +79,31 @@ if has_numpy:
         @property
         def unitless(self) -> bool:
             return bool(self._unit_obj.dimensionless)
+
+        @property
+        def _REGISTRY(self) -> _UnitRegistry:  # noqa: N802
+            return self._registry
+
+        def _repr_inline_(self, max_width: int) -> str:
+            """Inline representation for xarray display (pint-xarray compat)."""
+            unit_str = f"[{self._units_str}]"
+            values = [f"{v}" for v in self._magnitude.flat]
+            full = f"{unit_str} {' '.join(values)}"
+            if len(full) <= max_width:
+                return full
+            # Try "prefix ... last"
+            last = values[-1] if values else ""
+            for n in range(len(values) - 1, 0, -1):
+                prefix = " ".join(values[:n])
+                candidate = f"{unit_str} {prefix} ... {last}"
+                if len(candidate) <= max_width:
+                    return candidate
+            # Just first value with ...
+            if values:
+                candidate = f"{unit_str} {values[0]}..."
+                if len(candidate) <= max_width:
+                    return candidate
+            return f"{unit_str} ..."
 
         @property
         def shape(self) -> tuple[int, ...]:
@@ -90,7 +116,8 @@ if has_numpy:
 
         @property
         def dtype(self) -> np.dtype[Any]:
-            return self._magnitude.dtype  # type: ignore[no-any-return]
+            result: np.dtype[Any] = self._magnitude.dtype
+            return result
 
         @property
         def T(self) -> ArrayQuantity:  # noqa: N802
@@ -102,7 +129,8 @@ if has_numpy:
 
         @property
         def flat(self) -> np.flatiter[Any]:
-            return self._magnitude.flat  # type: ignore[no-any-return]
+            result: np.flatiter[Any] = self._magnitude.flat
+            return result
 
         @property
         def real(self) -> ArrayQuantity:
@@ -120,32 +148,42 @@ if has_numpy:
                 self._registry,
             )
 
-        def m_as(self, units: str) -> NDArray[Any]:
+        @staticmethod
+        def _coerce_units(units: Any) -> str:
+            """Convert a str, Unit, or Quantity to a unit string."""
+            if isinstance(units, str):
+                return units
+            return str(getattr(units, "units", units))
+
+        def m_as(self, units: Any) -> NDArray[Any]:
+            u = self._coerce_units(units)
             factor = self._registry._get_conversion_factor(
                 self._units_str,
-                units,
+                u,
             )
             return self._magnitude * factor
 
-        def to(self, units: str) -> ArrayQuantity:
+        def to(self, units: Any, *contexts: Any) -> ArrayQuantity:
+            u = self._coerce_units(units)
             factor = self._registry._get_conversion_factor(
                 self._units_str,
-                units,
+                u,
             )
             return ArrayQuantity(
                 self._magnitude * factor,
-                units,
+                u,
                 self._registry,
             )
 
-        def ito(self, units: str) -> None:
+        def ito(self, units: Any) -> None:
+            u = self._coerce_units(units)
             factor = self._registry._get_conversion_factor(
                 self._units_str,
-                units,
+                u,
             )
             self._magnitude = self._magnitude * factor
-            self._units_str = units
-            self._unit_obj = self._registry.Unit(units)
+            self._units_str = u
+            self._unit_obj = self._registry.Unit(u)
 
         def to_base_units(self) -> ArrayQuantity:
             factor, unit_str = self._registry._get_root_units(
@@ -193,7 +231,28 @@ if has_numpy:
             max: float | None = None,  # noqa: A002
         ) -> ArrayQuantity:
             return ArrayQuantity(
-                self._magnitude.clip(min, max),
+                self._magnitude.clip(cast("float", min), cast("float", max)),
+                self._units_str,
+                self._registry,
+            )
+
+        def sum(self, axis: int | None = None) -> ArrayQuantity | ScalarQuantity:
+            result = self._magnitude.sum(axis=axis)
+            if np.ndim(result) == 0:
+                return self._registry.Quantity(float(result), self._units_str)
+            return ArrayQuantity(result, self._units_str, self._registry)
+
+        def mean(self, axis: int | None = None) -> ArrayQuantity | ScalarQuantity:
+            result = self._magnitude.mean(axis=axis)
+            if np.ndim(result) == 0:
+                return self._registry.Quantity(float(result), self._units_str)
+            return ArrayQuantity(result, self._units_str, self._registry)
+
+        def reshape(self, *shape: Any) -> ArrayQuantity:
+            if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+                shape = tuple(shape[0])
+            return ArrayQuantity(
+                self._magnitude.reshape(shape),
                 self._units_str,
                 self._registry,
             )
@@ -226,10 +285,10 @@ if has_numpy:
         def searchsorted(
             self,
             v: float | ScalarQuantity | ArrayQuantity,
-            side: str = "left",
+            side: Literal["left", "right"] = "left",
         ) -> Any:
             mag = v.magnitude if isinstance(v, (ScalarQuantity, ArrayQuantity)) else v
-            return self._magnitude.searchsorted(mag, side=side)
+            return self._magnitude.searchsorted(mag, side=side)  # pyright: ignore[reportCallIssue]
 
         def dot(
             self,
@@ -306,6 +365,8 @@ if has_numpy:
                 return other._magnitude, other._units_str
             if isinstance(other, ScalarQuantity):
                 return other.magnitude, str(other.units)
+            if isinstance(other, _Unit):
+                return 1.0, str(other)
             return other, None
 
         def __add__(
@@ -765,6 +826,7 @@ if has_numpy:
                     if len(args) > 1
                     else kwargs.get("newshape", kwargs.get("shape"))
                 )
+                assert new_shape is not None
                 result = np.reshape(self._magnitude, new_shape)  # pyright: ignore[reportCallIssue]
                 return _array(result, self._units_str)
             if func is np.ones_like:
@@ -831,7 +893,7 @@ if has_numpy:
                 return _scalar(result, self._units_str)
             if func is np.percentile:
                 q_val = args[1] if len(args) > 1 else kwargs.get("q")
-                result = np.percentile(self._magnitude, q_val, **kwargs)
+                result = np.percentile(self._magnitude, cast("float", q_val), **kwargs)
                 return _scalar(result, self._units_str)
             if func is np.dot:
                 a, b = args[0], args[1]
@@ -935,7 +997,8 @@ if has_numpy:
                 else:
                     out_u = "dimensionless"
                 return _array(result, out_u)
-            if func is np.trapezoid:
+            _trapezoid = getattr(np, "trapezoid", None) or getattr(np, "trapz", None)
+            if _trapezoid is not None and func is _trapezoid:
                 y = args[0]
                 y_mag = y._magnitude if isinstance(y, ArrayQuantity) else np.asarray(y)
                 y_u = y._unit_obj if isinstance(y, ArrayQuantity) else None
@@ -950,9 +1013,9 @@ if has_numpy:
                         x_mag = x._magnitude
                     else:
                         x_mag = np.asarray(x)
-                    result = np.trapezoid(y_mag, x_mag, **trap_kwargs)
+                    result = _trapezoid(y_mag, x_mag, **trap_kwargs)
                 else:
-                    result = np.trapezoid(y_mag, **trap_kwargs)
+                    result = _trapezoid(y_mag, **trap_kwargs)
                 if y_u is not None and x_u is not None:
                     out_u = str(y_u * x_u)
                 elif y_u is not None:

@@ -98,17 +98,17 @@ class TestQuantityCreation:
         assert str(q.units) == "m"
 
     def test_getattr_meter(self, ureg: UnitRegistry) -> None:
-        q = ureg.meter
-        assert q.magnitude == 1.0
-        assert str(q.units) == "m"
+        u = ureg.meter
+        assert isinstance(u, Unit)
+        assert str(u) == "m"
 
     def test_getattr_kilogram(self, ureg: UnitRegistry) -> None:
-        q = ureg.kilogram
-        assert q.magnitude == 1.0
+        u = ureg.kilogram
+        assert str(u) == "kilogram"
 
     def test_getattr_symbol(self, ureg: UnitRegistry) -> None:
-        q = ureg.kg
-        assert q.magnitude == 1.0
+        u = ureg.kg
+        assert str(u) == "kilogram"
 
     def test_undefined_unit_raises(self, ureg: UnitRegistry) -> None:
         with pytest.raises((UndefinedUnitError, ValueError)):

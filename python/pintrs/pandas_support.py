@@ -254,7 +254,13 @@ if has_pandas:
                 dtype=PintDtype(units, reg),
             )
 
-    register_extension_dtype(PintDtype)
+    def register_pintrs_pandas() -> None:
+        """Register pintrs's PintDtype with pandas.
+
+        Call this explicitly if you want to use pintrs's pandas integration
+        instead of pint-pandas. Not registered by default to avoid conflicts.
+        """
+        register_extension_dtype(PintDtype)
 
 else:
 

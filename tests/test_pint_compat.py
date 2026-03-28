@@ -392,9 +392,9 @@ class TestRegistryOperations:
         assert str(u) != ""
 
     def test_getattr(self, ureg: UnitRegistry) -> None:
-        q = ureg.meter
-        assert q.magnitude == 1.0
-        assert str(q.units) == "m"
+        u = ureg.meter
+        assert isinstance(u, Unit)
+        assert str(u) == "m"
 
     def test_contains(self, ureg: UnitRegistry) -> None:
         assert "meter" in ureg

@@ -57,10 +57,9 @@ class TestExceptionRaising:
         with pytest.raises(UndefinedUnitError):
             ureg.Quantity(1, "gibberish_unit")
 
-    def test_redefinition_raises(self) -> None:
+    def test_redefinition_is_silently_ignored(self) -> None:
         ureg = UnitRegistry()
-        with pytest.raises((RedefinitionError, DefinitionSyntaxError)):
-            ureg.define("meter = [length]")
+        ureg.define("meter = [length]")  # should not raise (pint compat)
 
     def test_bad_definition_raises(self) -> None:
         ureg = UnitRegistry()

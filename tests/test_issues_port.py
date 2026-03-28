@@ -102,13 +102,14 @@ class TestCreationEdgeCases:
         assert u == ureg.Unit("meter")
 
     def test_registry_attribute_access(self, ureg: UnitRegistry) -> None:
-        q = ureg.meter
-        assert q.magnitude == 1.0
-        assert str(q.units) == "m"
+        u = ureg.meter
+        assert isinstance(u, Unit)
+        assert str(u) == "m"
 
     def test_registry_attribute_prefix(self, ureg: UnitRegistry) -> None:
-        q = ureg.kilometer
-        assert q.magnitude == 1.0
+        u = ureg.kilometer
+        assert isinstance(u, Unit)
+        assert str(u) == "kilometer"
 
 
 # ---------------------------------------------------------------------------

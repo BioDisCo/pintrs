@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from pintrs import UnitRegistry
+from pintrs import Unit, UnitRegistry
 
 
 class TestQuantityCreation:
@@ -19,12 +19,14 @@ class TestQuantityCreation:
         assert abs(q.magnitude - 3.5) < 1e-10
 
     def test_attribute_access(self, ureg: UnitRegistry) -> None:
-        q = ureg.meter
-        assert q.magnitude == 1.0
+        u = ureg.meter
+        assert isinstance(u, Unit)
+        assert str(u) == "m"
 
     def test_symbol_access(self, ureg: UnitRegistry) -> None:
-        q = ureg.kg
-        assert q.magnitude == 1.0
+        u = ureg.kg
+        assert isinstance(u, Unit)
+        assert str(u) == "kilogram"
 
     def test_dimensionless(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(5.0, "dimensionless")
