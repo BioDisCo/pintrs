@@ -245,8 +245,9 @@ fn parse_unit(line: &str) -> Option<UnitDef> {
 
     let relation = eq_parts[1].trim().to_string();
 
-    // Check if this defines a base dimension
-    let is_base = relation.starts_with('[') && relation.ends_with(']');
+    // Check if this defines a base dimension.
+    // "[]" means dimensionless (like radian, count, bit), not a new dimension.
+    let is_base = relation.starts_with('[') && relation.ends_with(']') && relation != "[]";
     let dimension = if is_base {
         Some(relation.clone())
     } else {
