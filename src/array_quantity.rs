@@ -290,10 +290,9 @@ impl PyArrayQuantity {
     }
 
     fn __add__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let a = self.magnitude.bind(py);
         if let Ok(other_aq) = other.extract::<PyRef<'_, Self>>() {
-            let a = self.magnitude.bind(py);
             let b = other_aq.magnitude.bind(py);
-
             let result: Bound<'_, PyArray1<f64>> = if self.units == other_aq.units {
                 a.call_method1("__add__", (b,))?.downcast_into()?
             } else {
@@ -315,6 +314,27 @@ impl PyArrayQuantity {
             .into_any()
             .unbind());
         }
+        if let Ok(q) = other.extract::<PyQuantity>() {
+            let factor = if self.units == q.units {
+                1.0
+            } else {
+                let mut reg = self.registry.lock().unwrap();
+                reg.get_conversion_factor(&q.units, &self.units)
+                    .map_err(to_py_err)?
+            };
+            let result: Bound<'_, PyArray1<f64>> = a
+                .call_method1("__add__", (q.magnitude * factor,))?
+                .downcast_into()?;
+            return Ok(Self {
+                magnitude: result.unbind(),
+                units: self.units.clone(),
+                registry: Arc::clone(&self.registry),
+                cached_registry_obj: OnceCell::new(),
+            }
+            .into_pyobject(py)?
+            .into_any()
+            .unbind());
+        }
         Ok(py.NotImplemented())
     }
 
@@ -323,10 +343,9 @@ impl PyArrayQuantity {
     }
 
     fn __sub__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let a = self.magnitude.bind(py);
         if let Ok(other_aq) = other.extract::<PyRef<'_, Self>>() {
-            let a = self.magnitude.bind(py);
             let b = other_aq.magnitude.bind(py);
-
             let result: Bound<'_, PyArray1<f64>> = if self.units == other_aq.units {
                 a.call_method1("__sub__", (b,))?.downcast_into()?
             } else {
@@ -338,6 +357,55 @@ impl PyArrayQuantity {
                 let b_scaled = np_mul_scalar(b, factor)?;
                 a.call_method1("__sub__", (&b_scaled,))?.downcast_into()?
             };
+            return Ok(Self {
+                magnitude: result.unbind(),
+                units: self.units.clone(),
+                registry: Arc::clone(&self.registry),
+                cached_registry_obj: OnceCell::new(),
+            }
+            .into_pyobject(py)?
+            .into_any()
+            .unbind());
+        }
+        if let Ok(q) = other.extract::<PyQuantity>() {
+            let factor = if self.units == q.units {
+                1.0
+            } else {
+                let mut reg = self.registry.lock().unwrap();
+                reg.get_conversion_factor(&q.units, &self.units)
+                    .map_err(to_py_err)?
+            };
+            let result: Bound<'_, PyArray1<f64>> = a
+                .call_method1("__sub__", (q.magnitude * factor,))?
+                .downcast_into()?;
+            return Ok(Self {
+                magnitude: result.unbind(),
+                units: self.units.clone(),
+                registry: Arc::clone(&self.registry),
+                cached_registry_obj: OnceCell::new(),
+            }
+            .into_pyobject(py)?
+            .into_any()
+            .unbind());
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __rsub__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // other - self
+        let a = self.magnitude.bind(py);
+        if let Ok(q) = other.extract::<PyQuantity>() {
+            let factor = if self.units == q.units {
+                1.0
+            } else {
+                let mut reg = self.registry.lock().unwrap();
+                reg.get_conversion_factor(&q.units, &self.units)
+                    .map_err(to_py_err)?
+            };
+            let neg_a: Bound<'_, PyArray1<f64>> = a.call_method0("__neg__")?.downcast_into()?;
+            let result: Bound<'_, PyArray1<f64>> = neg_a
+                .call_method1("__add__", (q.magnitude * factor,))?
+                .downcast_into()?;
             return Ok(Self {
                 magnitude: result.unbind(),
                 units: self.units.clone(),
@@ -417,6 +485,121 @@ impl PyArrayQuantity {
             .unbind());
         }
         Ok(py.NotImplemented())
+    }
+
+    fn __rtruediv__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // other / self
+        let arr = self.magnitude.bind(py);
+        if let Ok(val) = other.extract::<f64>() {
+            let result: Bound<'_, PyArray1<f64>> =
+                arr.call_method1("__rtruediv__", (val,))?.downcast_into()?;
+            let inv_units = {
+                let dim = crate::units_container::UnitsContainer::new();
+                &dim / &self.units
+            };
+            return Ok(Self {
+                magnitude: result.unbind(),
+                units: inv_units,
+                registry: Arc::clone(&self.registry),
+                cached_registry_obj: OnceCell::new(),
+            }
+            .into_pyobject(py)?
+            .into_any()
+            .unbind());
+        }
+        if let Ok(q) = other.extract::<PyQuantity>() {
+            let result: Bound<'_, PyArray1<f64>> = arr
+                .call_method1("__rtruediv__", (q.magnitude,))?
+                .downcast_into()?;
+            return Ok(Self {
+                magnitude: result.unbind(),
+                units: &q.units / &self.units,
+                registry: Arc::clone(&self.registry),
+                cached_registry_obj: OnceCell::new(),
+            }
+            .into_pyobject(py)?
+            .into_any()
+            .unbind());
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn copy(&self, py: Python<'_>) -> PyResult<Self> {
+        let arr = self.magnitude.bind(py);
+        let copied: Bound<'_, PyArray1<f64>> = arr.call_method0("copy")?.downcast_into()?;
+        Ok(Self {
+            magnitude: copied.unbind(),
+            units: self.units.clone(),
+            registry: Arc::clone(&self.registry),
+            cached_registry_obj: OnceCell::new(),
+        })
+    }
+
+    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let arr = self.magnitude.bind(py);
+        let result = arr.call_method1("__getitem__", (key,))?;
+        // If result is an ndarray, wrap as RustArrayQuantity; otherwise scalar Quantity
+        if result.downcast::<PyArray1<f64>>().is_ok() {
+            let new_arr: Bound<'_, PyArray1<f64>> = result.downcast_into()?;
+            return Ok(Self {
+                magnitude: new_arr.unbind(),
+                units: self.units.clone(),
+                registry: Arc::clone(&self.registry),
+                cached_registry_obj: OnceCell::new(),
+            }
+            .into_pyobject(py)?
+            .into_any()
+            .unbind());
+        }
+        let val: f64 = result.extract()?;
+        Ok(PyQuantity {
+            magnitude: val,
+            units: self.units.clone(),
+            registry: Arc::clone(&self.registry),
+            cached_dim: OnceCell::new(),
+            cached_registry_obj: OnceCell::new(),
+        }
+        .into_pyobject(py)?
+        .into_any()
+        .unbind())
+    }
+
+    fn __setitem__(
+        &self,
+        py: Python<'_>,
+        key: &Bound<'_, PyAny>,
+        value: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let arr = self.magnitude.bind(py);
+        if let Ok(q) = value.extract::<PyQuantity>() {
+            // Convert units, then assign scalar magnitude
+            let mut reg = self.registry.lock().unwrap();
+            let factor = reg
+                .get_conversion_factor(&q.units, &self.units)
+                .map_err(to_py_err)?;
+            drop(reg);
+            let converted = q.magnitude * factor;
+            arr.as_any().call_method1("__setitem__", (key, converted))?;
+        } else if let Ok(aq) = value.extract::<PyRef<'_, Self>>() {
+            // Convert units, then assign array magnitude
+            let mag = if aq.units == self.units {
+                aq.magnitude.bind(py).as_any().clone().unbind()
+            } else {
+                let mut reg = self.registry.lock().unwrap();
+                let factor = reg
+                    .get_conversion_factor(&aq.units, &self.units)
+                    .map_err(to_py_err)?;
+                drop(reg);
+                np_mul_scalar(aq.magnitude.bind(py), factor)?
+                    .into_any()
+                    .unbind()
+            };
+            arr.as_any().call_method1("__setitem__", (key, mag))?;
+        } else {
+            // Raw numeric value - assign directly
+            arr.as_any().call_method1("__setitem__", (key, value))?;
+        }
+        Ok(())
     }
 
     fn __neg__(&self, py: Python<'_>) -> PyResult<Self> {

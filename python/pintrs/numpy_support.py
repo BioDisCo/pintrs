@@ -297,6 +297,14 @@ if has_numpy:
             mag = other._magnitude if isinstance(other, ArrayQuantity) else other
             return self._magnitude.dot(mag)
 
+        def copy(self) -> ArrayQuantity:
+            """Return a copy of this quantity."""
+            return ArrayQuantity(
+                self._magnitude.copy(),
+                self._units_str,
+                self._registry,
+            )
+
         def __len__(self) -> int:
             return len(self._magnitude)
 
@@ -318,8 +326,9 @@ if has_numpy:
             key: int | slice | NDArray[np.intp],
             value: float | ScalarQuantity | ArrayQuantity,
         ) -> None:
-            if isinstance(value, (ScalarQuantity, ArrayQuantity)):
-                self._magnitude[key] = value.magnitude
+            if hasattr(value, "magnitude"):
+                converted = value.to(self._units_str)  # type: ignore[union-attr]
+                self._magnitude[key] = converted.magnitude
             else:
                 self._magnitude[key] = value
 
@@ -777,6 +786,8 @@ if has_numpy:
                 return NotImplemented
 
             def _scalar(val: Any, units: str) -> Any:
+                if isinstance(val, np.ndarray):
+                    return ArrayQuantity(val, units, self._registry)
                 return self._registry.Quantity(float(val), units)
 
             def _array(val: Any, units: str) -> ArrayQuantity:
@@ -1027,6 +1038,22 @@ if has_numpy:
                 if isinstance(result, np.ndarray):
                     return _array(result, out_u)
                 return _scalar(result, out_u)
+            if func is np.linalg.norm:
+                arr = args[0]
+                arr_mag = (
+                    arr._magnitude
+                    if isinstance(arr, ArrayQuantity)
+                    else np.asarray(arr)
+                )
+                norm_kwargs = dict(kwargs)
+                if len(args) > 1:
+                    norm_kwargs["ord"] = args[1]
+                if len(args) > 2:
+                    norm_kwargs["axis"] = args[2]
+                result = np.linalg.norm(arr_mag, **norm_kwargs)
+                if isinstance(result, np.ndarray):
+                    return _array(result, self._units_str)
+                return _scalar(result, self._units_str)
             return NotImplemented
 
     ArrayQuantity._COMPARISON_UFUNCS = frozenset(

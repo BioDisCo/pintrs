@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 from pintrs import _core as _core_module
 from pintrs._core import (
     DefinitionSyntaxError,
-    DimensionalityError,
     OffsetUnitCalculusError,
     PintError,
     RedefinitionError,
@@ -20,10 +19,62 @@ from pintrs._core import (
     Unit,
     UnitRegistry,
 )
-from pintrs._core import (
+from pintrs._core import DimensionalityError as _RustDimensionalityError
+
+
+def _dim_error_init(  # noqa: PLR0913
+    self: _RustDimensionalityError,
+    units1: object = "",
+    units2: object = "",
+    dim1: str = "",
+    dim2: str = "",
+    extra_msg: str = "",
+) -> None:
+    # Rust raises with a single pre-formatted message string; mark it so __str__
+    # can pass it through unchanged.
+    is_raw = (
+        isinstance(units1, str)
+        and not units2
+        and not dim1
+        and not dim2
+        and not extra_msg
+    )
+    if is_raw:
+        self._raw_msg = units1  # type: ignore[attr-defined]
+    else:
+        self._raw_msg = None  # type: ignore[attr-defined]
+    self.units1 = units1  # type: ignore[attr-defined]
+    self.units2 = units2  # type: ignore[attr-defined]
+    self.dim1 = dim1  # type: ignore[attr-defined]
+    self.dim2 = dim2  # type: ignore[attr-defined]
+    self.extra_msg = extra_msg  # type: ignore[attr-defined]
+
+
+def _dim_error_str(self: _RustDimensionalityError) -> str:
+    raw = getattr(self, "_raw_msg", None)
+    if raw is not None:
+        return raw
+    dim1 = getattr(self, "dim1", "")
+    dim2 = getattr(self, "dim2", "")
+    if dim1 or dim2:
+        d1 = f" ({dim1})"
+        d2 = f" ({dim2})"
+    else:
+        d1 = ""
+        d2 = ""
+    return (
+        f"Cannot convert from '{getattr(self, 'units1', '')}'{d1} to "
+        f"'{getattr(self, 'units2', '')}'{d2}{getattr(self, 'extra_msg', '')}"
+    )
+
+
+_RustDimensionalityError.__init__ = _dim_error_init  # type: ignore[assignment]
+_RustDimensionalityError.__str__ = _dim_error_str  # type: ignore[assignment]
+DimensionalityError = _RustDimensionalityError
+from pintrs._core import (  # noqa: E402
     Quantity as _RustQuantity,
 )
-from pintrs.context import ActiveContexts, Context
+from pintrs.context import ActiveContexts, Context  # noqa: E402
 
 
 class _QuantityMeta(type):
@@ -1070,14 +1121,14 @@ def _ureg_parse_pattern(
 _EPSILON = 1e-10
 
 
-def _ureg_pi_theorem(
+def _ureg_pi_theorem(  # noqa: PLR0912
     self: UnitRegistry,
-    quantities: dict[str, str],
+    quantities: dict[str, str | Any],
 ) -> list[dict[str, float]]:
     """Apply the Buckingham Pi theorem to find dimensionless groups.
 
     Args:
-        quantities: Mapping of variable names to unit strings.
+        quantities: Mapping of variable names to unit strings or Quantity objects.
 
     Returns:
         List of dicts mapping variable names to exponents forming
@@ -1090,7 +1141,13 @@ def _ureg_pi_theorem(
     all_dims: set[str] = set()
     dim_maps: list[dict[str, float]] = []
 
-    for unit_str in quantities.values():
+    for val in quantities.values():
+        if isinstance(val, str):
+            unit_str = val
+        elif hasattr(val, "units"):
+            unit_str = str(val.units)
+        else:
+            unit_str = str(val)
         _factor, base_unit = self.get_base_units(unit_str)
         base_d = dict(base_unit._units_dict())
         dim_maps.append(base_d)
@@ -1844,9 +1901,17 @@ def _to_arr(other: Any) -> Any:
     return None
 
 
+def _is_array_quantity(obj: Any) -> bool:
+    return isinstance(obj, (_PyArrayQuantity,)) or (
+        _RustArrayQuantity is not None and isinstance(obj, _RustArrayQuantity)
+    )
+
+
 def _q_array_mul(self: Any, other: Any) -> Any:
     if type(other) in _SCALAR_TYPES:
         return _original_q_mul(self, other)
+    if _is_array_quantity(other):
+        return other.__rmul__(self)
     arr = _to_arr(other)
     if arr is not None:
         mag = arr * self.magnitude
@@ -1857,6 +1922,8 @@ def _q_array_mul(self: Any, other: Any) -> Any:
 def _q_array_rmul(self: Any, other: Any) -> Any:
     if type(other) in _SCALAR_TYPES:
         return _original_q_rmul(self, other)
+    if _is_array_quantity(other):
+        return other.__mul__(self)
     arr = _to_arr(other)
     if arr is not None:
         mag = arr * self.magnitude
@@ -1876,6 +1943,8 @@ def _q_array_add(self: Any, other: Any) -> Any:
         if _is_nan(other):
             return _RustQuantity(float("nan"), str(self.units))
         return _original_q_add(self, other)
+    if _is_array_quantity(other):
+        return other.__radd__(self)
     arr = _to_arr(other)
     if arr is not None:
         mag = arr + self.magnitude
@@ -1888,6 +1957,8 @@ def _q_array_radd(self: Any, other: Any) -> Any:
         if _is_nan(other):
             return _RustQuantity(float("nan"), str(self.units))
         return _original_q_radd(self, other)
+    if _is_array_quantity(other):
+        return other.__add__(self)
     arr = _to_arr(other)
     if arr is not None:
         mag = arr + self.magnitude
@@ -1898,6 +1969,8 @@ def _q_array_radd(self: Any, other: Any) -> Any:
 def _q_array_sub(self: Any, other: Any) -> Any:
     if type(other) in _SCALAR_TYPES:
         return _original_q_sub(self, other)
+    if _is_array_quantity(other):
+        return other.__rsub__(self)
     arr = _to_arr(other)
     if arr is not None:
         return _make_array_quantity(
@@ -1911,6 +1984,8 @@ def _q_array_sub(self: Any, other: Any) -> Any:
 def _q_array_rsub(self: Any, other: Any) -> Any:
     if type(other) in _SCALAR_TYPES:
         return _original_q_rsub(self, other)
+    if _is_array_quantity(other):
+        return other.__sub__(self)
     arr = _to_arr(other)
     if arr is not None:
         return _make_array_quantity(
@@ -1924,6 +1999,8 @@ def _q_array_rsub(self: Any, other: Any) -> Any:
 def _q_array_truediv(self: Any, other: Any) -> Any:
     if type(other) in _SCALAR_TYPES:
         return _original_q_truediv(self, other)
+    if _is_array_quantity(other):
+        return other.__rtruediv__(self)
     arr = _to_arr(other)
     if arr is not None:
         return _make_array_quantity(
@@ -1937,6 +2014,8 @@ def _q_array_truediv(self: Any, other: Any) -> Any:
 def _q_array_rtruediv(self: Any, other: Any) -> Any:
     if type(other) in _SCALAR_TYPES:
         return _original_q_rtruediv(self, other)
+    if _is_array_quantity(other):
+        return other.__truediv__(self)
     arr = _to_arr(other)
     if arr is not None:
         inv_units = str(self._registry.Unit("dimensionless") / self.units)
