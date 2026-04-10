@@ -63,7 +63,7 @@ class TestPiTheoremWithQuantities:
             }
         )
         assert len(result1) == len(result2)
-        for g1, g2 in zip(result1, result2, strict=True):
+        for g1, g2 in zip(result1, result2):
             for key in g1:
                 assert g1[key] == pytest.approx(g2[key])
 
