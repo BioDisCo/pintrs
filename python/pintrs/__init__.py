@@ -869,6 +869,28 @@ if _RustArrayQuantity is not None:
 
     _RustArrayQuantity.__array_ufunc__ = _raq_array_ufunc  # type: ignore[attr-defined,union-attr]
 
+    try:
+        from pintrs.numpy_support import (
+            _dispatch_array_function as _numpy_dispatch,
+        )
+    except ImportError:
+        _numpy_dispatch = None  # type: ignore[assignment]
+
+    if _numpy_dispatch is not None:
+
+        def _raq_array_function(
+            self: Any,  # noqa: ARG001
+            func: Any,
+            types: tuple[type, ...],
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+        ) -> Any:
+            assert _numpy_dispatch is not None
+            return _numpy_dispatch(func, types, args, kwargs)
+
+        _RustArrayQuantity.__array_function__ = _raq_array_function  # type: ignore[attr-defined,union-attr]
+        _RustQuantity.__array_function__ = _raq_array_function  # type: ignore[attr-defined]
+
 
 def _q_REGISTRY(self: Any) -> UnitRegistry:  # noqa: N802
     return self._registry  # type: ignore[no-any-return]
@@ -1414,6 +1436,8 @@ def _is_duck_array(value: Any) -> bool:
         pass
     if isinstance(value, (list, tuple)):
         return True
+    if isinstance(value, _RustQuantity):
+        return False
     return hasattr(value, "__array_function__") or hasattr(value, "__array_ufunc__")
 
 
@@ -1896,6 +1920,10 @@ def _to_arr(other: Any) -> Any:
         return other
     if isinstance(other, (list, tuple)):
         return _np_cached.asarray(other) if _np_cached is not None else None
+    # ScalarQuantity now exposes __array_function__ for numpy dispatch, but
+    # it is not array-like for Python arithmetic — skip it here.
+    if isinstance(other, _RustQuantity):
+        return None
     if hasattr(other, "__array_function__"):
         return _np_cached.asarray(other) if _np_cached is not None else None
     return None
