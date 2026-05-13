@@ -24,7 +24,7 @@ class TestRegistryMethods:
     def test_get_base_units(self, ureg: UnitRegistry) -> None:
         factor, unit = ureg.get_base_units("kilometer")
         assert abs(factor - 1000) < 1e-10
-        assert str(unit) == "m"
+        assert str(unit) == "meter"
 
     def test_get_root_units(self, ureg: UnitRegistry) -> None:
         factor, _unit = ureg.get_root_units("kilometer")
@@ -80,7 +80,7 @@ class TestQuantityMethods:
         q = ureg.Quantity(5, "km")
         result = q.to_unprefixed()
         assert abs(result.magnitude - 5000) < 1e-10
-        assert str(result.units) == "m"
+        assert str(result.units) == "meter"
 
     def test_ito_unprefixed(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(5, "km")

@@ -47,7 +47,7 @@ class TestQuantityConstruction:
         q1 = ureg.Quantity(5, "meter")
         q2 = ureg.Quantity(q1)
         assert q2.magnitude == 5
-        assert str(q2.units) == "m"
+        assert str(q2.units) == "meter"
 
     def test_from_quantity_convert(self, ureg: UnitRegistry) -> None:
         q1 = ureg.Quantity(1, "kilometer")
@@ -93,7 +93,7 @@ class TestRegistryFeatures:
     def test_getattr_unit(self, ureg: UnitRegistry) -> None:
         u = ureg.meter
         assert isinstance(u, Unit)
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_get_compatible_units(self, ureg: UnitRegistry) -> None:
         units = ureg.get_compatible_units("meter")
@@ -234,7 +234,7 @@ class TestWrapsDecorator:
 
         result = add_lengths(ureg.Quantity(1, "km"), ureg.Quantity(500, "meter"))
         assert abs(result.magnitude - 1500) < 1e-10
-        assert str(result.units) == "m"
+        assert str(result.units) == "meter"
 
     def test_wraps_no_ret(self, ureg: UnitRegistry) -> None:
         @wraps(ureg, ret=None, args=("meter",))

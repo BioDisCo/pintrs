@@ -33,7 +33,7 @@ class TestCreationEdgeCases:
     def test_zero_quantity(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(0, "meter")
         assert q.magnitude == 0.0
-        assert str(q.units) == "m"
+        assert str(q.units) == "meter"
 
     def test_negative_quantity(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(-42.5, "second")
@@ -65,7 +65,7 @@ class TestCreationEdgeCases:
         q1 = ureg.Quantity(4.2, "meter")
         q2 = ureg.Quantity(q1)
         assert q2.magnitude == 4.2
-        assert str(q2.units) == "m"
+        assert str(q2.units) == "meter"
 
     def test_quantity_from_quantity_with_conversion(self, ureg: UnitRegistry) -> None:
         q1 = ureg.Quantity(1.0, "kilometer")
@@ -95,7 +95,7 @@ class TestCreationEdgeCases:
 
     def test_unit_from_string(self, ureg: UnitRegistry) -> None:
         u = ureg.Unit("meter")
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_unit_symbol_access(self, ureg: UnitRegistry) -> None:
         u = ureg.Unit("m")
@@ -104,7 +104,7 @@ class TestCreationEdgeCases:
     def test_registry_attribute_access(self, ureg: UnitRegistry) -> None:
         u = ureg.meter
         assert isinstance(u, Unit)
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_registry_attribute_prefix(self, ureg: UnitRegistry) -> None:
         u = ureg.kilometer
@@ -170,7 +170,7 @@ class TestConversionEdgeCases:
         q = ureg.Quantity(5.0, "kilometer")
         base = q.to_base_units()
         assert abs(base.magnitude - 5000.0) < 1e-10
-        assert str(base.units) == "m"
+        assert str(base.units) == "meter"
 
     def test_to_compact_small(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(0.001, "meter")
@@ -195,7 +195,7 @@ class TestConversionEdgeCases:
         q = ureg.Quantity(5.0, "km")
         result = q.to_unprefixed()
         assert abs(result.magnitude - 5000.0) < 1e-10
-        assert str(result.units) == "m"
+        assert str(result.units) == "meter"
 
     @pytest.mark.parametrize(
         ("src", "dst", "expected", "tol"),
@@ -301,7 +301,7 @@ class TestArithmeticEdgeCases:
         q = ureg.Quantity(5.0, "meter")
         result = -q
         assert result.magnitude == -5.0
-        assert str(result.units) == "m"
+        assert str(result.units) == "meter"
 
     def test_abs_negative(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(-5.0, "meter")
@@ -638,7 +638,7 @@ class TestPickleEdgeCases:
         q = Quantity(5.0, "meter")
         q2 = pickle.loads(pickle.dumps(q, protocol))
         assert abs(q2.magnitude - 5.0) < 1e-10
-        assert str(q2.units) == "m"
+        assert str(q2.units) == "meter"
 
     @pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
     def test_pickle_compound_quantity(self, protocol: int) -> None:
@@ -1010,7 +1010,7 @@ class TestRegistryOperations:
     def test_get_base_units(self, ureg: UnitRegistry) -> None:
         factor, unit = ureg.get_base_units("kilometer")
         assert abs(factor - 1000) < 1e-10
-        assert str(unit) == "m"
+        assert str(unit) == "meter"
 
     def test_get_dimensionality(self, ureg: UnitRegistry) -> None:
         assert ureg.get_dimensionality("meter") == "[length]"
@@ -1079,7 +1079,7 @@ class TestFormatting:
 
     def test_str(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
-        assert str(q) == "3.5 m"
+        assert str(q) == "3.5 meter"
 
     def test_repr_contains_value(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
@@ -1089,7 +1089,7 @@ class TestFormatting:
 
     def test_format_empty(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
-        assert format(q, "") == "3.5 m"
+        assert format(q, "") == "3.5 meter"
 
     def test_format_pretty(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(9.8, "m/s^2")
@@ -1109,7 +1109,7 @@ class TestFormatting:
 
     def test_unit_format_str(self, ureg: UnitRegistry) -> None:
         u = ureg.Unit("meter")
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_unit_repr(self, ureg: UnitRegistry) -> None:
         u = ureg.Unit("meter")

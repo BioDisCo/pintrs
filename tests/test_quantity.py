@@ -8,7 +8,7 @@ class TestQuantityCreation:
     def test_from_value_and_units(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
         assert q.magnitude == 3.5
-        assert str(q.units) == "m"
+        assert str(q.units) == "meter"
 
     def test_from_string(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity("9.8 m/s^2")
@@ -21,7 +21,7 @@ class TestQuantityCreation:
     def test_attribute_access(self, ureg: UnitRegistry) -> None:
         u = ureg.meter
         assert isinstance(u, Unit)
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_symbol_access(self, ureg: UnitRegistry) -> None:
         u = ureg.kg
@@ -56,7 +56,7 @@ class TestQuantityConversion:
         q = ureg.Quantity(1.0, "kilometer")
         base = q.to_base_units()
         assert abs(base.magnitude - 1000.0) < 1e-10
-        assert str(base.units) == "m"
+        assert str(base.units) == "meter"
 
     def test_incompatible_raises(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(1.0, "meter")
@@ -232,7 +232,7 @@ class TestRepr:
 
     def test_str(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
-        assert str(q) == "3.5 m"
+        assert str(q) == "3.5 meter"
 
     def test_hash(self, ureg: UnitRegistry) -> None:
         a = ureg.Quantity(1, "meter")

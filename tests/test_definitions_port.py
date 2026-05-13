@@ -51,8 +51,8 @@ class TestBuiltinUnitDefinitions:
     def test_coulomb_definition(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(1, "coulomb")
         base = q.to_base_units()
-        assert "s" in str(base.units)
-        assert "A" in str(base.units)
+        assert "second" in str(base.units)
+        assert "ampere" in str(base.units)
 
     def test_turn_equals_tau_radians(self, ureg: UnitRegistry) -> None:
         import math

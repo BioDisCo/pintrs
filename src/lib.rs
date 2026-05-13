@@ -331,7 +331,7 @@ impl PyUnitRegistry {
     fn get_symbol(&self, unit: &str) -> PyResult<String> {
         let reg = self.inner.lock().unwrap();
         let canonical = reg.get_canonical_name(unit).map_err(to_py_err)?;
-        Ok(reg.get_display_name(&canonical))
+        Ok(reg.get_display_name(&canonical, true))
     }
 
     /// Check if two unit expressions are dimensionally compatible.
@@ -1006,10 +1006,11 @@ impl PyQuantity {
         Ok(reg.get_units_by_dimensionality(&dim))
     }
 
-    /// Internal: get unit string for serialization
+    /// Internal: get unit string using symbols (compact form).
+    /// The Python formatting layer uses this to obtain the abbreviated unit names.
     fn _units_str(&self) -> String {
         let reg = self.registry.lock().unwrap();
-        reg.format_units(&self.units)
+        reg.format_units_compact(&self.units)
     }
 
     /// Internal: get the raw units container as dict
@@ -1037,16 +1038,18 @@ impl PyQuantity {
 
     fn __format__(&self, spec: &str) -> PyResult<String> {
         let reg = self.registry.lock().unwrap();
-        let unit_str = reg.format_units(&self.units);
+        let compact = spec.contains('~');
+        let unit_str = if compact {
+            reg.format_units_compact(&self.units)
+        } else {
+            reg.format_units(&self.units)
+        };
 
         if spec.is_empty() {
             return Ok(format!("{} {}", self.magnitude, unit_str));
         }
 
-        // Parse pint-compatible format spec: [magnitude_spec][~][P|L|H|C|D]
-        let spec_str = spec;
-        let compact = spec_str.contains('~');
-        let spec_clean: String = spec_str.chars().filter(|c| *c != '~').collect();
+        let spec_clean: String = spec.chars().filter(|c| *c != '~').collect();
 
         // Extract unit format type (last char if it's a letter and not part of float format)
         let (mag_spec, _unit_fmt) = if spec_clean.ends_with('P')
@@ -1068,14 +1071,7 @@ impl PyQuantity {
             format!("{}", self.magnitude) // Simplified; full impl in Python wrapper
         };
 
-        let display_unit = if compact {
-            // ~P: use short symbols
-            unit_str.clone()
-        } else {
-            unit_str
-        };
-
-        Ok(format!("{} {}", mag_str, display_unit))
+        Ok(format!("{} {}", mag_str, unit_str))
     }
 
     fn __float__(&self) -> PyResult<f64> {
@@ -1705,7 +1701,7 @@ impl PyUnit {
 
     fn _units_str(&self) -> String {
         let reg = self.registry.lock().unwrap();
-        reg.format_units(&self.units)
+        reg.format_units_compact(&self.units)
     }
 
     fn _units_dict(&self) -> Vec<(String, f64)> {
@@ -1720,6 +1716,15 @@ impl PyUnit {
     fn __str__(&self) -> String {
         let reg = self.registry.lock().unwrap();
         reg.format_units(&self.units)
+    }
+
+    fn __format__(&self, spec: &str) -> PyResult<String> {
+        let reg = self.registry.lock().unwrap();
+        if spec.contains('~') {
+            Ok(reg.format_units_compact(&self.units))
+        } else {
+            Ok(reg.format_units(&self.units))
+        }
     }
 
     fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {

@@ -23,7 +23,7 @@ class TestUnitJitCompat:
         q = ureg.Quantity(100.0, "cm")
         base = q.to_base_units()
         assert base.magnitude == pytest.approx(1.0)
-        assert str(base.units) == "m"
+        assert str(base.units) == "meter"
 
     def test_quantity_to_base_units_magnitude(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(2.0, "kg")
@@ -32,7 +32,7 @@ class TestUnitJitCompat:
     def test_quantity_to_base_units_units(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(1.0, "km")
         base = q.to_base_units()
-        assert str(base.units) == "m"
+        assert str(base.units) == "meter"
 
     def test_quantity_dimensionality_dict_like(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(1.0, "m/s")
@@ -92,7 +92,7 @@ class TestUnitJitCompat:
     def test_ureg_getattr_returns_unit(self, ureg: UnitRegistry) -> None:
         u = ureg.m
         assert isinstance(u, Unit)
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_ureg_quantity_constructor(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(5.0, "m/s")
@@ -312,5 +312,5 @@ class TestKilogramBase:
     def test_newton_definition(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(1.0, "N")
         base = q.to_base_units()
-        assert str(base.units) == "kilogram * m / s ** 2"
+        assert str(base.units) == "kilogram * meter / second ** 2"
         assert base.magnitude == pytest.approx(1.0)

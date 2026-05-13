@@ -99,7 +99,7 @@ class TestQuantityConversion:
         q = ureg.Quantity(5.0, "kilometer")
         base = q.to_base_units()
         assert abs(base.magnitude - 5000.0) < 1e-10
-        assert str(base.units) == "m"
+        assert str(base.units) == "meter"
 
     def test_ito(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(1.0, "kilometer")
@@ -257,7 +257,7 @@ class TestQuantityRepr:
 
     def test_str(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
-        assert str(q) == "3.5 m"
+        assert str(q) == "3.5 meter"
 
     def test_repr(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
@@ -267,7 +267,7 @@ class TestQuantityRepr:
 
     def test_format_empty(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
-        assert format(q, "") == "3.5 m"
+        assert format(q, "") == "3.5 meter"
 
 
 class TestQuantityPickle:
@@ -277,7 +277,7 @@ class TestQuantityPickle:
         q = Quantity(5.0, "meter")
         q2 = pickle.loads(pickle.dumps(q))
         assert abs(q2.magnitude - 5.0) < 1e-10
-        assert str(q2.units) == "m"
+        assert str(q2.units) == "meter"
 
     def test_copy(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(5.0, "meter")
@@ -394,7 +394,7 @@ class TestRegistryOperations:
     def test_getattr(self, ureg: UnitRegistry) -> None:
         u = ureg.meter
         assert isinstance(u, Unit)
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_contains(self, ureg: UnitRegistry) -> None:
         assert "meter" in ureg

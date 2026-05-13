@@ -76,7 +76,7 @@ class TestToQuantity:
         result = q.to_quantity()
         # 30 dBm = 1 W
         assert abs(result.magnitude - 1.0) < 1e-6
-        assert str(result.units) == "W"
+        assert str(result.units) == "watt"
 
     def test_dBW_to_quantity(self, ureg: UnitRegistry) -> None:
         q = LogarithmicQuantity(0.0, "dBW", ureg)

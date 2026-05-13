@@ -50,7 +50,7 @@ class TestDaskArrayQuantityInterop:
         meters = ArrayQuantity(nparr, "meter", ureg)
         seconds = ArrayQuantity(nparr, "second", ureg)
         result = meters * seconds
-        assert result.units_str == "m * s"
+        assert result.units_str == "meter * second"
         assert result.magnitude[0] == pytest.approx(1.0)
 
     def test_dask_2d_array(self, ureg: UnitRegistry) -> None:

@@ -198,6 +198,23 @@ impl UnitRegistry {
             return Ok(());
         }
 
+        // Units defined as "[]" (e.g. radian, bit, count) are dimensionless but
+        // act as their own base unit -- to_base_units() on a radian should
+        // return radian, not "dimensionless".
+        if def.relation.trim() == "[]" {
+            let entry = UnitEntry {
+                name: def.name.clone(),
+                factor: 1.0,
+                root_units: UnitsContainer::from_single(def.name.clone(), 1.0),
+                dimensionality: UnitsContainer::new(),
+                offset: def.offset.unwrap_or(0.0),
+                symbol: def.symbol.clone(),
+                aliases: def.aliases.clone(),
+            };
+            self.register_unit(entry);
+            return Ok(());
+        }
+
         // Derived unit: resolve the relation
         let (factor, root_units, dimensionality) = self.resolve_relation(&def.relation)?;
 
@@ -905,18 +922,31 @@ impl UnitRegistry {
         vec![]
     }
 
-    /// Get the display name for a unit in a UnitsContainer (prefer symbols)
-    pub fn get_display_name(&self, canonical: &str) -> String {
-        if let Some(entry) = self.units.get(canonical) {
-            if let Some(ref sym) = entry.symbol {
-                return sym.clone();
+    /// Get the display name for a unit in a UnitsContainer.
+    /// When `compact` is true, returns the symbol (e.g. "m") if available.
+    /// When false, returns the canonical (long) name (e.g. "meter").
+    pub fn get_display_name(&self, canonical: &str, compact: bool) -> String {
+        if compact {
+            if let Some(entry) = self.units.get(canonical) {
+                if let Some(ref sym) = entry.symbol {
+                    return sym.clone();
+                }
             }
         }
         canonical.to_string()
     }
 
-    /// Format a UnitsContainer using symbols where possible
+    /// Format a UnitsContainer using canonical (long) unit names.
     pub fn format_units(&self, units: &UnitsContainer) -> String {
+        self.format_units_with(units, false)
+    }
+
+    /// Format a UnitsContainer using symbols (compact form).
+    pub fn format_units_compact(&self, units: &UnitsContainer) -> String {
+        self.format_units_with(units, true)
+    }
+
+    fn format_units_with(&self, units: &UnitsContainer, compact: bool) -> String {
         if units.is_empty() {
             return "dimensionless".to_string();
         }
@@ -927,7 +957,7 @@ impl UnitRegistry {
         neg.sort_by(|a, b| a.0.cmp(b.0));
 
         let fmt_unit = |name: &str, exp: f64| -> String {
-            let display = self.get_display_name(name);
+            let display = self.get_display_name(name, compact);
             let abs_exp = exp.abs();
             if (abs_exp - 1.0).abs() < f64::EPSILON {
                 display

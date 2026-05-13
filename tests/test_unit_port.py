@@ -30,16 +30,16 @@ class TestUnitCreation:
 
     def test_create_from_string(self, ureg: UnitRegistry) -> None:
         u = ureg.Unit("meter")
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_create_from_symbol(self, ureg: UnitRegistry) -> None:
         u = ureg.Unit("m")
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_create_from_parse_units(self, ureg: UnitRegistry) -> None:
         u = ureg.parse_units("meter")
         assert isinstance(u, Unit)
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_create_compound_mul(self, ureg: UnitRegistry) -> None:
         u = ureg.parse_units("meter * second")
@@ -90,7 +90,7 @@ class TestUnitCreation:
     def test_getattr_returns_unit(self, ureg: UnitRegistry) -> None:
         u = ureg.meter
         assert type(u).__name__ == "Unit"
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ class TestUnitRepresentation:
 
     def test_str(self, ureg: UnitRegistry) -> None:
         u = ureg.parse_units("meter")
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_repr(self, ureg: UnitRegistry) -> None:
         u = ureg.parse_units("meter")
@@ -445,7 +445,7 @@ class TestUnitConversion:
         meter = ureg.Unit("meter")
         q = ureg.Quantity(5, "kilometer")
         result = meter.from_(q)
-        assert str(result.units) == "m"
+        assert str(result.units) == "meter"
 
     def test_m_from_simple(self, ureg: UnitRegistry) -> None:
         meter = ureg.Unit("meter")

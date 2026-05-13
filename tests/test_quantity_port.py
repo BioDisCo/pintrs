@@ -33,7 +33,7 @@ class TestQuantityCreation:
     def test_from_value_and_units(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(4.2, "meter")
         assert q.magnitude == 4.2
-        assert str(q.units) == "m"
+        assert str(q.units) == "meter"
 
     def test_from_integer_and_units(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3, "second")
@@ -51,7 +51,7 @@ class TestQuantityCreation:
         q1 = ureg.Quantity(4.2, "meter")
         q2 = ureg.Quantity(q1)
         assert q2.magnitude == 4.2
-        assert str(q2.units) == "m"
+        assert str(q2.units) == "meter"
 
     def test_from_quantity_with_conversion(self, ureg: UnitRegistry) -> None:
         q1 = ureg.Quantity(1.0, "kilometer")
@@ -95,12 +95,12 @@ class TestQuantityCreation:
     def test_direct_constructor(self) -> None:
         q = Quantity(5.0, "meter")
         assert q.magnitude == 5.0
-        assert str(q.units) == "m"
+        assert str(q.units) == "meter"
 
     def test_getattr_meter(self, ureg: UnitRegistry) -> None:
         u = ureg.meter
         assert isinstance(u, Unit)
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_getattr_kilogram(self, ureg: UnitRegistry) -> None:
         u = ureg.kilogram
@@ -145,7 +145,7 @@ class TestQuantityConversion:
         q = ureg.Quantity(5.0, "kilometer")
         base = q.to_base_units()
         assert abs(base.magnitude - 5000.0) < 1e-10
-        assert str(base.units) == "m"
+        assert str(base.units) == "meter"
 
     def test_ito_base_units(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(5.0, "km")
@@ -191,7 +191,7 @@ class TestQuantityConversion:
         q = ureg.Quantity(5, "km")
         result = q.to_unprefixed()
         assert abs(result.magnitude - 5000) < 1e-10
-        assert str(result.units) == "m"
+        assert str(result.units) == "meter"
 
     def test_ito_unprefixed(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(5, "km")
@@ -304,7 +304,7 @@ class TestQuantityArithmetic:
     def test_mul_same_unit(self, ureg: UnitRegistry) -> None:
         result = ureg.Quantity(2.0, "meter") * ureg.Quantity(3.0, "meter")
         assert result.magnitude == 6.0
-        assert "m ** 2" in str(result.units)
+        assert "meter ** 2" in str(result.units)
 
     def test_mul_scalar_right(self, ureg: UnitRegistry) -> None:
         result = ureg.Quantity(5.0, "meter") * 3
@@ -455,7 +455,7 @@ class TestQuantityRepresentation:
 
     def test_str_simple(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
-        assert str(q) == "3.5 m"
+        assert str(q) == "3.5 meter"
 
     def test_repr_contains_value(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
@@ -470,7 +470,7 @@ class TestQuantityRepresentation:
 
     def test_format_empty(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
-        assert format(q, "") == "3.5 m"
+        assert format(q, "") == "3.5 meter"
 
     def test_format_abbreviation(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
@@ -532,7 +532,7 @@ class TestQuantitySerialization:
         q = Quantity(5.0, "meter")
         q2 = pickle.loads(pickle.dumps(q))
         assert abs(q2.magnitude - 5.0) < 1e-10
-        assert str(q2.units) == "m"
+        assert str(q2.units) == "meter"
 
     def test_pickle_compound_units(self) -> None:
         q = Quantity(9.8, "m/s^2")
@@ -847,13 +847,13 @@ class TestQuantityDask:
         q = ureg.Quantity(3.5, "meter")
         result = q.compute()
         assert result.magnitude == 3.5
-        assert str(result.units) == "m"
+        assert str(result.units) == "meter"
 
     def test_persist_returns_self(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(3.5, "meter")
         result = q.persist()
         assert result.magnitude == 3.5
-        assert str(result.units) == "m"
+        assert str(result.units) == "meter"
 
 
 # ---------------------------------------------------------------------------
@@ -944,7 +944,7 @@ class TestQuantityProperties:
 
     def test_u_alias(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(5.0, "meter")
-        assert str(q.u) == "m"
+        assert str(q.u) == "meter"
 
     def test_unit_items(self, ureg: UnitRegistry) -> None:
         q = ureg.Quantity(5, "m/s")
@@ -975,7 +975,7 @@ class TestUnitOperations:
 
     def test_unit_str(self, ureg: UnitRegistry) -> None:
         u = ureg.Unit("meter")
-        assert str(u) == "m"
+        assert str(u) == "meter"
 
     def test_unit_repr(self, ureg: UnitRegistry) -> None:
         u = ureg.Unit("meter")
