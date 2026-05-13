@@ -368,14 +368,14 @@ if has_numpy:
                 self._registry,
             )
 
-        def flatten(self, order: str = "C") -> ArrayQuantity:
+        def flatten(self, order: Literal["K", "A", "C", "F"] = "C") -> ArrayQuantity:
             return ArrayQuantity(
                 self._magnitude.flatten(order=order),
                 self._units_str,
                 self._registry,
             )
 
-        def ravel(self, order: str = "C") -> ArrayQuantity:
+        def ravel(self, order: Literal["K", "A", "C", "F"] = "C") -> ArrayQuantity:
             return ArrayQuantity(
                 self._magnitude.ravel(order=order),
                 self._units_str,
@@ -1103,7 +1103,7 @@ if has_numpy:
         shape: Any,
         fill_value: Any,
         dtype: Any = None,
-        order: str = "C",
+        order: Literal["C", "F"] = "C",
     ) -> Any:
         reg = _registry_of(fill_value)
         unit = _unit_str_of(fill_value)
@@ -1118,7 +1118,7 @@ if has_numpy:
         a: Any,
         fill_value: Any,
         dtype: Any = None,
-        order: str = "K",
+        order: Literal["K", "A", "C", "F"] = "K",
         subok: bool = True,
         shape: Any = None,
     ) -> Any:
@@ -1141,7 +1141,7 @@ if has_numpy:
     def _zeros_like_impl(
         a: Any,
         dtype: Any = None,
-        order: str = "K",
+        order: Literal["K", "A", "C", "F"] = "K",
         subok: bool = True,
         shape: Any = None,
     ) -> Any:
@@ -1157,7 +1157,7 @@ if has_numpy:
     def _ones_like_impl(
         a: Any,
         dtype: Any = None,
-        order: str = "K",
+        order: Literal["K", "A", "C", "F"] = "K",
         subok: bool = True,
         shape: Any = None,
     ) -> Any:
@@ -1173,7 +1173,7 @@ if has_numpy:
     def _empty_like_impl(
         prototype: Any,
         dtype: Any = None,
-        order: str = "K",
+        order: Literal["K", "A", "C", "F"] = "K",
         subok: bool = True,
         shape: Any = None,
     ) -> Any:
@@ -1222,7 +1222,9 @@ if has_numpy:
         axis: int | None = 0,
         out: Any = None,
         dtype: Any = None,
-        casting: str = "same_kind",
+        casting: Literal[
+            "no", "equiv", "safe", "same_kind", "same_value", "unsafe"
+        ] = "same_kind",
     ) -> Any:
         reg = _first_registry(*arrays)
         out_unit: str | None = None
@@ -1628,7 +1630,9 @@ if has_numpy:
         return _make_result(result, fp_unit, reg)
 
     @implements(np.convolve)
-    def _convolve_impl(a: Any, v: Any, mode: str = "full") -> Any:
+    def _convolve_impl(
+        a: Any, v: Any, mode: Literal["valid", "same", "full"] = "full"
+    ) -> Any:
         a_mag = _mag_of(a)
         v_mag = _mag_of(v)
         a_u = _unit_obj_of(a)
