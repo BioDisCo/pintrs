@@ -892,6 +892,37 @@ if _RustArrayQuantity is not None:
         _RustQuantity.__array_function__ = _raq_array_function  # type: ignore[attr-defined]
 
 
+def _rq_array_ufunc(
+    self: Any,
+    ufunc: Any,
+    method: str,
+    *inputs: Any,
+    **kwargs: Any,
+) -> Any:
+    """Handle numpy ufuncs (np.sin, np.exp, np.log, ...) on a scalar Quantity.
+
+    The scalar Rust ``Quantity`` does not implement the ufunc protocol itself,
+    so without this numpy falls back to looking for a ``.sin()``/``.exp()``
+    method on the object and raises ``TypeError``. We delegate to the
+    ``ArrayQuantity`` ufunc machinery, which already handles ``ScalarQuantity``
+    inputs and unit checking and returns a scalar ``Quantity`` for scalar
+    results.
+    """
+    if method != "__call__":
+        return NotImplemented
+    import numpy as _np  # noqa: PLC0415
+
+    host = _PyArrayQuantity(
+        _np.asarray(self.magnitude),
+        str(self.units),
+        self._registry,
+    )
+    return host.__array_ufunc__(ufunc, method, *inputs, **kwargs)
+
+
+_RustQuantity.__array_ufunc__ = _rq_array_ufunc  # type: ignore[attr-defined]
+
+
 def _q_REGISTRY(self: Any) -> UnitRegistry:  # noqa: N802
     return self._registry  # type: ignore[no-any-return]
 

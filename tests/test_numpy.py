@@ -165,3 +165,44 @@ class TestArrayNumpy:
         q = ArrayQuantity(numpy.array([1.0, 2.0]), "meter", ureg)
         arr = numpy.asarray(q)
         numpy.testing.assert_array_equal(arr, [1.0, 2.0])
+
+
+class TestScalarTranscendental:
+    """Regression tests for GH #4: ufuncs on dimensionless scalar quantities."""
+
+    @pytest.mark.parametrize(
+        ("func", "expected"),
+        [
+            (numpy.sin, numpy.sin(1.0)),
+            (numpy.cos, numpy.cos(1.0)),
+            (numpy.exp, numpy.exp(1.0)),
+            (numpy.log, numpy.log(1.0)),
+        ],
+    )
+    def test_dimensionless_scalar_ufunc(
+        self,
+        ureg: UnitRegistry,
+        func: object,
+        expected: float,
+    ) -> None:
+        q = ureg.Quantity(10, "s") / ureg.Quantity(10, "s")
+        result = func(q)  # type: ignore[operator]
+        assert result.dimensionless
+        assert result.magnitude == pytest.approx(expected)
+
+    def test_scalar_trig_radians(self, ureg: UnitRegistry) -> None:
+        result = numpy.sin(ureg.Quantity(numpy.pi / 2, "rad"))
+        assert result.magnitude == pytest.approx(1.0)
+
+    def test_scalar_trig_degrees(self, ureg: UnitRegistry) -> None:
+        result = numpy.sin(ureg.Quantity(90, "deg"))
+        assert result.magnitude == pytest.approx(1.0)
+
+    def test_scalar_trig_non_dimensionless_raises(
+        self,
+        ureg: UnitRegistry,
+    ) -> None:
+        from pintrs import DimensionalityError
+
+        with pytest.raises(DimensionalityError):
+            numpy.sin(ureg.Quantity(10, "s"))
