@@ -58,9 +58,10 @@ ignore = ["S101"]
 
 [tool.mypy]
 strict = true
-# mypy 2.x dropped support for targeting 3.9; 3.10 is the lowest it accepts.
-# Runtime 3.9 compatibility is enforced by ruff (target-version py39) and tox.
-python_version = "3.10"
+# mypy 2.x dropped support for targeting 3.9, and recent numpy stubs use PEP 695
+# `type` statements that mypy only parses when targeting 3.12+. The type-check CI
+# job runs on 3.12; runtime 3.9 compatibility is enforced by ruff (py39) and tox.
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

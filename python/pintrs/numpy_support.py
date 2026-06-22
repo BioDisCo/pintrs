@@ -351,13 +351,13 @@ if has_numpy:
             result = self._magnitude.sum(axis=axis)
             if np.ndim(result) == 0:
                 return self._registry.Quantity(float(result), self._units_str)
-            return ArrayQuantity(result, self._units_str, self._registry)
+            return ArrayQuantity(np.asarray(result), self._units_str, self._registry)
 
         def mean(self, axis: int | None = None) -> ArrayQuantity | ScalarQuantity:
             result = self._magnitude.mean(axis=axis)
             if np.ndim(result) == 0:
                 return self._registry.Quantity(float(result), self._units_str)
-            return ArrayQuantity(result, self._units_str, self._registry)
+            return ArrayQuantity(np.asarray(result), self._units_str, self._registry)
 
         def reshape(self, *shape: Any) -> ArrayQuantity:
             if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
