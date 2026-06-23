@@ -737,9 +737,11 @@ if has_numpy:
         _ARCTAN2_UFUNCS: frozenset[np.ufunc] = frozenset()
         # Ufuncs that require matching dimensions for two inputs
         _MATCHING_DIMS_UFUNCS: frozenset[np.ufunc] = frozenset()
+        # Matching-dims ufuncs where a bare operand must be dimensionless
+        _BARE_STRICT_UFUNCS: frozenset[np.ufunc] = frozenset()
 
-        @staticmethod
         def _ufunc_output_units(
+            self,
             ufunc: np.ufunc,
             input_units: list[Unit | None],
             processed: list[NDArray[Any] | float],
@@ -759,13 +761,22 @@ if has_numpy:
                 u1 = input_units[1] if len(input_units) > 1 else None
                 if u0 is not None and u1 is not None:
                     return str(u0 / u1)
-                return str(u0) if u0 is not None else default_units
-            if ufunc is np.power:
+                if u0 is not None:
+                    return str(u0)
+                # bare numerator / quantity -> inverse unit (e.g. 3 / (2 m)).
+                return str(u1**-1) if u1 is not None else default_units
+            if ufunc in (np.power, np.float_power):
                 exp = processed[1] if len(processed) > 1 else 1
                 if isinstance(exp, np.ndarray):
                     exp = float(exp.flat[0])
                 u0 = input_units[0]
-                return str(u0 ** float(exp)) if u0 is not None else default_units
+                # A bare or (scaled-)dimensionless base raised to a dimensionless
+                # exponent is itself dimensionless, not the base/exponent unit.
+                if u0 is None or self._registry.Quantity(1.0, str(u0)).dimensionless:
+                    return "dimensionless"
+                return str(u0 ** float(exp))
+            if ufunc in (np.heaviside, np.sign):
+                return "dimensionless"
             power_map: dict[np.ufunc, float] = {
                 np.sqrt: 0.5,
                 np.square: 2.0,
@@ -784,7 +795,17 @@ if has_numpy:
             processed: list[NDArray[Any] | float],
             input_units: list[Unit | None],
         ) -> list[NDArray[Any] | float]:
-            """Check dimensionality and convert units for add/subtract."""
+            """Check dimensionality and convert units for add/subtract/compare.
+
+            Unit-bearing operands are aligned to a common unit. For ufuncs that
+            require all operands to share dimensionality, a bare (unitless)
+            operand is treated as dimensionless: it is rejected against a
+            dimensional quantity and converted into the operand's unit for a
+            (scaled) dimensionless one, e.g. ``add(1000 ms/s, 1) -> 2000 ms/s``.
+            mod/fmod/remainder keep their unit and treat a bare number as raw,
+            and arctan2 is scaled in ``_check_trig_units``, so neither takes part
+            in the bare-number handling.
+            """
             from pintrs import DimensionalityError  # noqa: PLC0415
 
             if ufunc not in self._MATCHING_DIMS_UFUNCS:
@@ -792,22 +813,70 @@ if has_numpy:
             units_with_idx = [
                 (i, u) for i, u in enumerate(input_units) if u is not None
             ]
-            if len(units_with_idx) < 2:
+            if not units_with_idx:
                 return processed
             _, base_unit = units_with_idx[0]
+            base_dim = str(base_unit.dimensionality)
             result = list(processed)
             for idx, unit in units_with_idx[1:]:
-                if str(unit.dimensionality) != str(base_unit.dimensionality):
+                if str(unit.dimensionality) != base_dim:
                     msg = f"Cannot convert from '{unit}' to '{base_unit}'"
                     raise DimensionalityError(msg)
                 if str(unit) != str(base_unit):
                     inp = inputs[idx]
                     if isinstance(inp, ArrayQuantity):
-                        converted = inp.to(str(base_unit))
-                        result[idx] = converted._magnitude
+                        result[idx] = inp.to(str(base_unit))._magnitude
                     elif isinstance(inp, ScalarQuantity):
-                        converted_q = inp.to(str(base_unit))
-                        result[idx] = converted_q.magnitude
+                        result[idx] = inp.to(str(base_unit)).magnitude
+
+            bare_indices = [i for i, u in enumerate(input_units) if u is None]
+            if bare_indices and ufunc in self._BARE_STRICT_UFUNCS:
+                if not self._registry.Quantity(1.0, str(base_unit)).dimensionless:
+                    msg = (
+                        f"Cannot apply '{ufunc.__name__}' to '{base_unit}' "
+                        f"mixed with a dimensionless value"
+                    )
+                    raise DimensionalityError(msg)
+                factor = self._registry._get_conversion_factor(
+                    "dimensionless", str(base_unit)
+                )
+                if factor != 1.0:
+                    for i in bare_indices:
+                        result[i] = processed[i] * factor
+            return result
+
+        def _require_dimensionless_operand(
+            self,
+            ufunc: np.ufunc,
+            processed: list[NDArray[Any] | float],
+            input_units: list[Unit | None],
+            idx: int,
+        ) -> list[NDArray[Any] | float]:
+            """Require operand ``idx`` to be dimensionless and fold in its scale.
+
+            A quantity can be dimensionally dimensionless yet carry a non-unity
+            scale, e.g. ``millisecond / second`` converts to plain dimensionless
+            with a factor of ``0.001``. NumPy ufuncs see only the raw magnitude,
+            so the factor must be applied before evaluating sin/exp/log/power/etc.,
+            otherwise ``sin(pi * (8 ms / 8 s))`` would wrongly use ``pi`` instead
+            of ``pi * 0.001``. Bare (unitless) operands are left untouched.
+            """
+            from pintrs import DimensionalityError  # noqa: PLC0415
+
+            u = input_units[idx]
+            if u is None:
+                return processed
+            u_str = str(u)
+            if not self._registry.Quantity(1.0, u_str).dimensionless:
+                msg = (
+                    f"Cannot apply '{ufunc.__name__}' to quantity with units '{u_str}'"
+                )
+                raise DimensionalityError(msg)
+            factor = self._registry._get_conversion_factor(u_str, "dimensionless")
+            if factor == 1.0:
+                return processed
+            result = list(processed)
+            result[idx] = processed[idx] * factor
             return result
 
         def _check_trig_units(
@@ -817,7 +886,7 @@ if has_numpy:
             processed: list[NDArray[Any] | float],
             input_units: list[Unit | None],
         ) -> list[NDArray[Any] | float]:
-            """Validate and convert units for trig/exp/log ufuncs."""
+            """Validate and convert units for trig/exp/log/power ufuncs."""
             from pintrs import DimensionalityError  # noqa: PLC0415
 
             if ufunc in self._TRIG_UFUNCS:
@@ -830,34 +899,64 @@ if has_numpy:
                         result = list(processed)
                         result[0] = np.deg2rad(processed[0])
                         return result
-                    q_check = self._registry.Quantity(1.0, u_str)
-                    if q_check.dimensionless:
-                        return processed
-                    msg = (
-                        f"Cannot apply '{ufunc.__name__}' to quantity "
-                        f"with units '{u_str}'"
+                    return self._require_dimensionless_operand(
+                        ufunc, processed, input_units, 0
                     )
-                    raise DimensionalityError(msg)
             if ufunc in self._INVERSE_TRIG_UFUNCS:
-                u = input_units[0] if input_units else None
-                if u is not None:
-                    q_check = self._registry.Quantity(1.0, str(u))
-                    if not q_check.dimensionless:
-                        msg = (
-                            f"Cannot apply '{ufunc.__name__}' to quantity "
-                            f"with units '{u}'"
-                        )
-                        raise DimensionalityError(msg)
+                processed = self._require_dimensionless_operand(
+                    ufunc, processed, input_units, 0
+                )
             if ufunc in self._DIMENSIONLESS_UFUNCS:
-                u = input_units[0] if input_units else None
-                if u is not None:
-                    q_check = self._registry.Quantity(1.0, str(u))
-                    if not q_check.dimensionless:
+                # exp/log are unary, but logaddexp/logaddexp2 are binary: every
+                # operand must be dimensionless and scaled by its own factor.
+                for idx in range(len(input_units)):
+                    processed = self._require_dimensionless_operand(
+                        ufunc, processed, input_units, idx
+                    )
+            # power/float_power: the exponent must be dimensionless (fold in its
+            # scale so both the numeric result and the output unit use the true
+            # value). An array exponent is only valid on a dimensionless base,
+            # since a single output unit cannot represent differing powers.
+            if ufunc in (np.power, np.float_power) and len(input_units) > 1:
+                processed = self._require_dimensionless_operand(
+                    ufunc, processed, input_units, 1
+                )
+                base_u = input_units[0]
+                if base_u is not None:
+                    if self._registry.Quantity(1.0, str(base_u)).dimensionless:
+                        # A (scaled-)dimensionless base contributes its true
+                        # value, e.g. (2 ms/s) ** n uses 0.002, not 2.
+                        factor = self._registry._get_conversion_factor(
+                            str(base_u), "dimensionless"
+                        )
+                        if factor != 1.0:
+                            processed = list(processed)
+                            processed[0] = processed[0] * factor
+                    elif np.asarray(processed[1]).size > 1:
                         msg = (
-                            f"Cannot apply '{ufunc.__name__}' to quantity "
-                            f"with units '{u}'"
+                            f"Cannot raise '{base_u}' to an array of powers; "
+                            f"array exponents require a dimensionless base"
                         )
                         raise DimensionalityError(msg)
+            if ufunc in self._ARCTAN2_UFUNCS:
+                # Two matching-unit quantities are already aligned by
+                # _check_additive_compat (the ratio is scale-invariant). When one
+                # operand is a bare number, the quantity must be dimensionless and
+                # scaled so it is comparable to the unitless operand.
+                units_with_idx = [
+                    (i, u) for i, u in enumerate(input_units) if u is not None
+                ]
+                if len(units_with_idx) == 1:
+                    idx, u = units_with_idx[0]
+                    if not self._registry.Quantity(1.0, str(u)).dimensionless:
+                        msg = (
+                            f"Cannot apply 'arctan2' to '{u}' "
+                            f"mixed with a dimensionless value"
+                        )
+                        raise DimensionalityError(msg)
+                    processed = self._require_dimensionless_operand(
+                        ufunc, processed, input_units, idx
+                    )
             return processed
 
         _COMPARISON_UFUNCS: frozenset[np.ufunc] = frozenset()
@@ -879,6 +978,11 @@ if has_numpy:
                 elif isinstance(inp, ScalarQuantity):
                     processed.append(inp.magnitude)
                     input_units.append(inp.units)
+                elif _RustArrayQuantity is not None and isinstance(
+                    inp, _RustArrayQuantity
+                ):
+                    processed.append(np.asarray(inp.m))
+                    input_units.append(self._registry.Unit(inp._units_str))
                 else:
                     processed.append(inp)
                     input_units.append(None)
@@ -913,6 +1017,27 @@ if has_numpy:
                     self._units_str,
                 )
 
+            if isinstance(result, tuple):
+                # Multi-output ufuncs (modf, frexp). modf keeps the unit on both
+                # parts; frexp's exponent is an integer (dimensionless).
+                wrapped: list[Any] = []
+                for i, part in enumerate(result):
+                    part_units = (
+                        "dimensionless" if ufunc is np.frexp and i == 1 else out_units
+                    )
+                    if isinstance(part, np.ndarray):
+                        wrapped.append(ArrayQuantity(part, part_units, self._registry))
+                    elif np.isscalar(part):
+                        mag = part.item() if isinstance(part, np.generic) else part
+                        if isinstance(mag, (int, float)):
+                            wrapped.append(
+                                self._registry.Quantity(float(mag), part_units)
+                            )
+                        else:
+                            wrapped.append(part)
+                    else:
+                        wrapped.append(part)
+                return tuple(wrapped)
             if isinstance(result, np.ndarray):
                 return ArrayQuantity(result, out_units, self._registry)
             if np.isscalar(result):
@@ -989,13 +1114,38 @@ if has_numpy:
     # arctan2 takes two args with matching units and returns radians
     ArrayQuantity._ARCTAN2_UFUNCS = frozenset({np.arctan2})
 
+    # NB: mod/fmod/remainder are intentionally absent. pint applies them to the
+    # raw magnitudes (no unit conversion) and keeps the left operand's unit, even
+    # for differently-scaled or incompatible units, so they must not be aligned.
     ArrayQuantity._MATCHING_DIMS_UFUNCS = frozenset(
         {
             np.add,
             np.subtract,
-            np.remainder,
-            np.mod,
-            np.fmod,
+            np.copysign,
+            np.nextafter,
+            np.greater,
+            np.greater_equal,
+            np.less,
+            np.less_equal,
+            np.equal,
+            np.not_equal,
+            np.maximum,
+            np.minimum,
+            np.fmax,
+            np.fmin,
+            np.hypot,
+            np.arctan2,
+        },
+    )
+
+    # Subset of _MATCHING_DIMS_UFUNCS that require every operand to share
+    # dimensionality, so a bare number must be dimensionless (and is converted
+    # into the quantity's unit). Excludes mod/fmod/remainder (which keep the
+    # unit and treat a bare number as raw) and arctan2 (scaled separately).
+    ArrayQuantity._BARE_STRICT_UFUNCS = frozenset(
+        {
+            np.add,
+            np.subtract,
             np.copysign,
             np.nextafter,
             np.greater,
@@ -1007,7 +1157,6 @@ if has_numpy:
             np.maximum,
             np.minimum,
             np.hypot,
-            np.arctan2,
         },
     )
 
@@ -1300,6 +1449,8 @@ if has_numpy:
         reg = _first_registry(a, a_min, a_max)
         unit = _unit_str_of(a)
         a_mag = _mag_of(a)
+        # Bare bounds are intentionally treated as the array's own unit (a
+        # pintrs convenience that differs from pint's strict rejection).
         a_min_mag = (
             _convert_mag(_mag_of(a_min), _unit_str_of(a_min), unit or "", reg)
             if a_min is not None
@@ -1311,6 +1462,16 @@ if has_numpy:
             else None
         )
         result = np.clip(a_mag, a_min_mag, a_max_mag, out=out, **kwargs)
+        if unit is None:
+            return result
+        return _make_result(result, unit, reg)
+
+    @implements(np.around)
+    @implements(np.round)
+    def _around_impl(a: Any, decimals: int = 0, out: Any = None) -> Any:
+        reg = _first_registry(a)
+        unit = _unit_str_of(a)
+        result = np.around(_mag_of(a), decimals=decimals, out=out)
         if unit is None:
             return result
         return _make_result(result, unit, reg)

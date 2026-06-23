@@ -865,7 +865,13 @@ if _RustArrayQuantity is not None:
                 )
             else:
                 converted.append(inp)
-        return converted[0].__array_ufunc__(ufunc, method, *converted, **kwargs)
+        # Dispatch on the first operand that implements the ufunc protocol; a
+        # bare scalar (e.g. the base in ``power(2, array_quantity)``) does not,
+        # so converted[0] is not always a valid handler.
+        handler = next((c for c in converted if isinstance(c, _PyArrayQuantity)), None)
+        if handler is None:
+            return NotImplemented
+        return handler.__array_ufunc__(ufunc, method, *converted, **kwargs)
 
     _RustArrayQuantity.__array_ufunc__ = _raq_array_ufunc  # type: ignore[attr-defined,union-attr]
 
