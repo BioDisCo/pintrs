@@ -920,7 +920,9 @@ if has_numpy:
                     raise DimensionalityError(msg)
                 base = self._magnitude * self._dimensionless_factor()
                 return ArrayQuantity(base**exp_mag, "dimensionless", self._registry)
-            new_units = str(self._unit_obj**exp_mag)
+            # exp_mag is a scalar here (the array-exponent branch returned above);
+            # coerce so the Unit ** exponent is unambiguously scalar-typed.
+            new_units = str(self._unit_obj ** float(exp_mag))
             return ArrayQuantity(self._magnitude**exp_mag, new_units, self._registry)
 
         def __rpow__(self, base: Any) -> ArrayQuantity:
