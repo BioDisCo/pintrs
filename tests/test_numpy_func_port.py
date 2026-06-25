@@ -383,7 +383,10 @@ class TestArrayQuantityMethods:
         a = ArrayQuantity(np.array([1.0, 2.0, 3.0]), "meter", ureg)
         b = ArrayQuantity(np.array([4.0, 5.0, 6.0]), "second", ureg)
         r = a.dot(b)
-        assert r == pytest.approx(32.0)
+        # dot tracks units like pint: meter * second.
+        assert r.magnitude == pytest.approx(32.0)
+        assert "meter" in str(r.units)
+        assert "second" in str(r.units)
 
     def test_prod(self, ureg: UnitRegistry) -> None:
         a = ArrayQuantity(np.array([2.0, 3.0, 4.0]), "dimensionless", ureg)
@@ -396,7 +399,8 @@ class TestArrayQuantityMethods:
         np.testing.assert_array_equal(r.magnitude, [[1.0, 3.0], [2.0, 4.0]])
 
     def test_clip(self, ureg: UnitRegistry) -> None:
-        a = ArrayQuantity(np.array([1.0, 5.0, 10.0]), "meter", ureg)
+        # bare bounds require a dimensionless array (pint parity).
+        a = ArrayQuantity(np.array([1.0, 5.0, 10.0]), "", ureg)
         r = a.clip(2.0, 8.0)
         np.testing.assert_array_equal(r.magnitude, [2.0, 5.0, 8.0])
 

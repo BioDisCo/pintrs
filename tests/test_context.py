@@ -98,3 +98,11 @@ class TestContextEnableDisable:
     def test_enable_disable(self, ureg: UnitRegistry) -> None:
         ureg.enable_contexts("spectroscopy")
         ureg.disable_contexts("spectroscopy")
+
+
+class TestToWithContextArgument:
+    def test_to_target_context_positional(self, ureg: UnitRegistry) -> None:
+        # `.to(target, "spectroscopy")` should apply the named context (pint form).
+        r = ureg.Quantity(500.0, "nanometer").to("hertz", "spectroscopy")
+        assert str(r.units) == "hertz"
+        assert r.magnitude == pytest.approx(599584915999999.9, rel=1e-9)

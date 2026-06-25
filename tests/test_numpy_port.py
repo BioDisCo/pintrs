@@ -121,14 +121,15 @@ class TestArrayQuantityArithmetic:
 
 class TestArrayQuantityComparison:
     def test_eq(self, ureg: UnitRegistry) -> None:
+        # == is elementwise like pint/numpy.
         a = ArrayQuantity([1, 2], "meter", ureg)
         b = ArrayQuantity([1, 2], "meter", ureg)
-        assert a == b
+        np.testing.assert_array_equal(a == b, [True, True])
 
     def test_ne(self, ureg: UnitRegistry) -> None:
         a = ArrayQuantity([1, 2], "meter", ureg)
         b = ArrayQuantity([1, 3], "meter", ureg)
-        assert a != b
+        np.testing.assert_array_equal(a != b, [False, True])
 
 
 class TestArrayQuantityRepresentation:
@@ -395,10 +396,29 @@ class TestArrayQuantityComparisonOps:
         result = a > b
         np.testing.assert_array_equal(result, [True, False])
 
-    def test_comparison_with_scalar(self, ureg: UnitRegistry) -> None:
+    def test_comparison_with_scalar_dimensionless(self, ureg: UnitRegistry) -> None:
+        # Dimensionless arrays compare against a bare number by base-unit value.
+        a = ArrayQuantity([1, 2, 3, 4], "", ureg)
+        np.testing.assert_array_equal(a > 2, [False, False, True, True])
+        # Scaled-dimensionless array: must compare in base units (issue #5).
+        scaled = ArrayQuantity([4.0], "cm/ms", ureg) / ArrayQuantity(
+            [1.0], "m/s", ureg
+        )  # == 40
+        np.testing.assert_array_equal(scaled < 41, [True])
+        np.testing.assert_array_equal(scaled < 5, [False])
+
+    def test_comparison_dimensional_with_scalar_raises(
+        self, ureg: UnitRegistry
+    ) -> None:
+        # Comparing a dimensional array to a non-zero bare number is an error
+        # (pint parity), but comparison against zero is allowed (sign check).
         a = ArrayQuantity([1, 2, 3, 4], "meter", ureg)
-        result = a > 2
-        np.testing.assert_array_equal(result, [False, False, True, True])
+        with pytest.raises(DimensionalityError):
+            _ = a > 2
+        np.testing.assert_array_equal(a > 0, [True, True, True, True])
+        np.testing.assert_array_equal(
+            ArrayQuantity([-1, 1], "meter", ureg) < 0, [True, False]
+        )
 
 
 class TestArrayUfuncPower:
@@ -699,25 +719,34 @@ class TestArrayQuantityClip:
     """Tests for clip operations."""
 
     def test_clip_min(self, ureg: UnitRegistry) -> None:
-        aq = ArrayQuantity([1, 2, 3, 4, 5], "meter", ureg)
+        # bare bounds require a dimensionless array (pint parity).
+        aq = ArrayQuantity([1, 2, 3, 4, 5], "", ureg)
         result = aq.clip(min=3)
         np.testing.assert_array_equal(result.magnitude, [3, 3, 3, 4, 5])
 
     def test_clip_max(self, ureg: UnitRegistry) -> None:
-        aq = ArrayQuantity([1, 2, 3, 4, 5], "meter", ureg)
+        aq = ArrayQuantity([1, 2, 3, 4, 5], "", ureg)
         result = aq.clip(max=3)
         np.testing.assert_array_equal(result.magnitude, [1, 2, 3, 3, 3])
 
     def test_clip_both(self, ureg: UnitRegistry) -> None:
-        aq = ArrayQuantity([1, 2, 3, 4, 5], "meter", ureg)
+        aq = ArrayQuantity([1, 2, 3, 4, 5], "", ureg)
         result = aq.clip(min=2, max=4)
         np.testing.assert_array_equal(result.magnitude, [2, 2, 3, 4, 4])
 
     def test_np_clip(self, ureg: UnitRegistry) -> None:
-        aq = ArrayQuantity([1, 2, 3, 4, 5], "meter", ureg)
+        aq = ArrayQuantity([1, 2, 3, 4, 5], "", ureg)
         result = np.clip(aq, 2, 4)
         assert isinstance(result, ArrayQuantity)
         np.testing.assert_array_equal(result.magnitude, [2, 2, 3, 4, 4])
+
+    def test_clip_dimensional_bare_bounds_raises(self, ureg: UnitRegistry) -> None:
+        # Dimensional array with bare bounds raises, like pint.
+        aq = ArrayQuantity([1, 2, 3], "meter", ureg)
+        with pytest.raises(DimensionalityError):
+            np.clip(aq, 2, 4)
+        with pytest.raises(DimensionalityError):
+            _ = aq.clip(2, 4)
 
 
 class TestArrayQuantitySorting:
@@ -1021,6 +1050,34 @@ class TestArrayQuantityAddSubtractUnitChecking:
         result = np.subtract(a, b)
         np.testing.assert_allclose(result.magnitude, [1, 2])
 
+    def test_add_number_to_scaled_dimensionless(self, ureg: UnitRegistry) -> None:
+        # Issue #5 (ArrayQuantity path): adding a bare number to a dimensionless
+        # array that carries intermediate scaled units must convert to base units.
+        a = ArrayQuantity([4.0], "cm/ms", ureg) / ArrayQuantity([1.0], "m/s", ureg)
+        result = (a + 1).to_base_units()
+        np.testing.assert_allclose(result.magnitude, [41.0])
+        assert result.dimensionless
+        result_r = (1 - a).to_base_units()
+        np.testing.assert_allclose(result_r.magnitude, [-39.0])
+
+    def test_add_number_to_dimensional_raises(self, ureg: UnitRegistry) -> None:
+        a = ArrayQuantity([5.0], "meter", ureg)
+        with pytest.raises(DimensionalityError):
+            _ = a + 1
+        with pytest.raises(DimensionalityError):
+            _ = a - 1
+
+    def test_add_zero_allowed_for_any_dimension(self, ureg: UnitRegistry) -> None:
+        # Adding zero is allowed for any quantity and keeps its units (pint).
+        a = ArrayQuantity([1.0, 2.0], "meter", ureg)
+        np.testing.assert_allclose((a + 0).magnitude, [1.0, 2.0])
+        assert str((a + 0).units) == "meter"
+        np.testing.assert_allclose((a + np.zeros(2)).magnitude, [1.0, 2.0])
+        np.testing.assert_allclose((0 - a).magnitude, [-1.0, -2.0])
+        # Non-zero array operand on a dimensional quantity still raises.
+        with pytest.raises(DimensionalityError):
+            _ = a + np.array([0.0, 5.0])
+
 
 class TestArrayQuantityMedianPercentile:
     """Tests for np.median and np.percentile."""
@@ -1090,3 +1147,551 @@ class TestArrayQuantityReductionAxes:
         aq = ArrayQuantity(np.array([[1, 2], [3, 4]]), "meter", ureg)
         result = np.var(aq.magnitude, axis=0)
         np.testing.assert_allclose(result, [1, 1])
+
+
+class TestPublicArrayBareArithmetic:
+    """Issue #5: the public ``ureg.Quantity(ndarray, ...)`` array path must
+    convert dimensionless-scaled values to base units when combined with a
+    bare number, and support %, //, **, divmod and ordered comparisons."""
+
+    @staticmethod
+    def _scaled(ureg: UnitRegistry) -> object:
+        # [40, 50] dimensionless, stored with intermediate units cm*s/m/ms.
+        return ureg.Quantity(np.array([4.0, 5.0]), "cm/ms") / ureg.Quantity(1.0, "m/s")
+
+    def test_add_sub_bare(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        np.testing.assert_allclose((a + 2).to_base_units().magnitude, [42.0, 52.0])
+        np.testing.assert_allclose((2 - a).to_base_units().magnitude, [-38.0, -48.0])
+        np.testing.assert_allclose(
+            (a + np.array([1.0, 1.0])).to_base_units().magnitude, [41.0, 51.0]
+        )
+
+    def test_floordiv_mod_bare(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        np.testing.assert_allclose((a // 2).to_base_units().magnitude, [20.0, 25.0])
+        np.testing.assert_allclose((a % 2).to_base_units().magnitude, [0.0, 0.0])
+        np.testing.assert_allclose((2 // a).to_base_units().magnitude, [0.0, 0.0])
+
+    def test_pow_bare(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        np.testing.assert_allclose((a**2).to_base_units().magnitude, [1600.0, 2500.0])
+
+    def test_divmod_bare(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        d, m = divmod(a, 2)
+        np.testing.assert_allclose(d.to_base_units().magnitude, [20.0, 25.0])
+        np.testing.assert_allclose(m.to_base_units().magnitude, [0.0, 0.0])
+
+    def test_comparison_bare(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        np.testing.assert_array_equal(a < 41, [True, False])
+        np.testing.assert_array_equal(a > 45, [False, True])
+
+    def test_dimensional_bare_raises(self, ureg: UnitRegistry) -> None:
+        m = ureg.Quantity(np.array([1.0, 2.0]), "meter")
+        with pytest.raises(DimensionalityError):
+            _ = m + 2
+        with pytest.raises(DimensionalityError):
+            _ = m % 2
+        with pytest.raises(DimensionalityError):
+            _ = m < 2
+        # Zero is allowed for any dimension.
+        np.testing.assert_allclose((m + 0).magnitude, [1.0, 2.0])
+        np.testing.assert_array_equal(m > 0, [True, True])
+
+
+class TestArrayDimensionlessClipMatmul:
+    """Issue #5 clip parity + matmul support."""
+
+    def test_clip_scaled_dimensionless_bare_bounds(self, ureg: UnitRegistry) -> None:
+        # Bare clip bounds on a dimensionless-scaled array are interpreted as
+        # dimensionless values (operate in base units), matching pint.
+        # base values are [0.5, 2, 5].
+        a = ArrayQuantity(np.array([0.05, 0.2, 0.5]), "cm*s/m/ms", ureg)
+        result = np.clip(a, 1, 3).to_base_units()
+        np.testing.assert_allclose(result.magnitude, [1.0, 2.0, 3.0])
+
+    def test_matmul(self, ureg: UnitRegistry) -> None:
+        a = ArrayQuantity(np.array([[1.0, 2.0]]), "meter", ureg)
+        b = ArrayQuantity(np.array([[100.0], [200.0]]), "centimeter", ureg)
+        result = a @ b
+        np.testing.assert_allclose(result.magnitude, [[500.0]])
+        # units are the product (meter * centimeter)
+        units_str = str(result.units)
+        assert "meter" in units_str
+        assert "centimeter" in units_str
+
+
+class TestScaledDimensionlessNumpyFuncs:
+    """Issue #5: numpy functions that mix a bare operand with a scaled-
+    dimensionless quantity must operate on base-unit values (pint parity)."""
+
+    @staticmethod
+    def _scaled(ureg: UnitRegistry) -> ArrayQuantity:
+        return ArrayQuantity(
+            np.array([0.05, 0.2, 0.5]), "cm*s/m/ms", ureg
+        )  # base [0.5,2,5]
+
+    def test_fmax_fmin_bare(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)  # base [0.5, 2, 5]
+        np.testing.assert_allclose(
+            np.fmax(a, 2).to_base_units().magnitude, [2.0, 2.0, 5.0]
+        )
+        np.testing.assert_allclose(
+            np.fmin(a, 2).to_base_units().magnitude, [0.5, 2.0, 2.0]
+        )
+
+    def test_where_bare_branch(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        result = np.where([True, False, True], a, 3).to_base_units()
+        np.testing.assert_allclose(result.magnitude, [0.5, 3.0, 5.0])
+
+    def test_isclose_allclose_bare(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        np.testing.assert_array_equal(
+            np.isclose(a, [0.5, 2.0, 5.0]), [True, True, True]
+        )
+        assert np.allclose(a, [0.5, 2.0, 5.0])
+
+    def test_comparison_ufunc_bare_list(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        np.testing.assert_array_equal(
+            np.greater(a, [0.4, 2.1, 4.9]), [True, False, True]
+        )
+
+    def test_interp_matches_numpy(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)  # base fp = [0.5, 2, 5]
+        result = np.interp([-1, 0.5, 3], [0, 1, 2], a, left=1, right=3).to_base_units()
+        # Matches raw numpy on base-unit values.
+        np.testing.assert_allclose(
+            result.magnitude,
+            np.interp([-1, 0.5, 3], [0, 1, 2], [0.5, 2, 5], left=1, right=3),
+        )
+
+
+class TestScaledDimensionlessStructural:
+    """Issue #5: structural numpy functions taking a bare value must treat it as
+    a dimensionless (base) value for a dimensionless-scaled quantity."""
+
+    @staticmethod
+    def _scaled(ureg: UnitRegistry) -> ArrayQuantity:
+        return ArrayQuantity(
+            np.array([0.05, 0.2, 0.5]), "cm*s/m/ms", ureg
+        )  # base [0.5,2,5]
+
+    def test_full_like_append_pad(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        np.testing.assert_allclose(
+            np.full_like(a, 2).to_base_units().magnitude, [2.0, 2.0, 2.0]
+        )
+        np.testing.assert_allclose(
+            np.append(a, 2).to_base_units().magnitude, [0.5, 2.0, 5.0, 2.0]
+        )
+        np.testing.assert_allclose(
+            np.pad(a, (1, 1), constant_values=2).to_base_units().magnitude,
+            [2.0, 0.5, 2.0, 5.0, 2.0],
+        )
+
+    def test_cumprod_base(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        np.testing.assert_allclose(
+            np.cumprod(a).to_base_units().magnitude, [0.5, 1.0, 5.0]
+        )
+
+    def test_searchsorted_put(self, ureg: UnitRegistry) -> None:
+        assert self._scaled(ureg).searchsorted(2) == 1
+        a = self._scaled(ureg)
+        a.put([0, 2], 2)
+        np.testing.assert_allclose(a.to_base_units().magnitude, [2.0, 2.0, 2.0])
+
+    def test_concatenate_bare_array(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        result = np.concatenate([a, np.array([2.0])]).to_base_units()
+        np.testing.assert_allclose(result.magnitude, [0.5, 2.0, 5.0, 2.0])
+
+
+class TestScaledDimensionlessCreationClip:
+    """Issue #5: array-creation funcs and the scalar clip() method must treat a
+    bare value as dimensionless (base) for a dimensionless-scaled quantity."""
+
+    def test_linspace_mixed_endpoints(self, ureg: UnitRegistry) -> None:
+        start = ureg.Quantity(100.0, "millisecond/second")  # base 0.1
+        result = np.linspace(start, 1, 3).to_base_units()
+        np.testing.assert_allclose(result.magnitude, [0.1, 0.55, 1.0])
+
+    def test_stack_bare_array(self, ureg: UnitRegistry) -> None:
+        a = ureg.Quantity(np.array([100.0, 200.0]), "millisecond/second")
+        result = np.stack([a, [1, 2]]).to_base_units()
+        np.testing.assert_allclose(result.magnitude, [[0.1, 0.2], [1.0, 2.0]])
+
+    def test_scalar_clip_method(self, ureg: UnitRegistry) -> None:
+        q = ureg.Quantity(200.0, "millisecond/second")  # base 0.2
+        assert q.clip(0.5, 1.5).to_base_units().magnitude == pytest.approx(0.5)
+        q2 = ureg.Quantity(800.0, "millisecond/second")  # base 0.8
+        assert q2.clip(0.5, 1.5).to_base_units().magnitude == pytest.approx(0.8)
+
+
+class TestScaledDimensionlessClipFillMethods:
+    """Issue #5: ArrayQuantity.clip()/fill() methods must treat bare values as
+    dimensionless (base) for a dimensionless-scaled quantity."""
+
+    @staticmethod
+    def _scaled(ureg: UnitRegistry) -> ArrayQuantity:
+        return ArrayQuantity(np.array([0.05, 0.2, 0.5]), "cm*s/m/ms", ureg)
+
+    def test_clip_method(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        np.testing.assert_allclose(a.clip(1, 3).to_base_units().magnitude, [1, 2, 3])
+
+    def test_fill_method(self, ureg: UnitRegistry) -> None:
+        a = self._scaled(ureg)
+        a.fill(2)
+        np.testing.assert_allclose(a.to_base_units().magnitude, [2, 2, 2])
+
+    def test_dimensional_clip_method_raises(self, ureg: UnitRegistry) -> None:
+        # Dimensional clip with bare bounds raises, like pint.
+        m = ArrayQuantity(np.array([1.0, 3.0, 5.0]), "meter", ureg)
+        with pytest.raises(DimensionalityError):
+            _ = m.clip(2, 4)
+
+
+class TestScaledDimensionlessSetitemDot:
+    """Issue #5: __setitem__ and dot must treat bare values as dimensionless
+    (base) for a dimensionless-scaled quantity."""
+
+    def test_setitem_public_rust_path(self, ureg: UnitRegistry) -> None:
+        q = ureg.Quantity(np.array([1000.0, 2000.0, 3000.0]), "ms/s")  # base [1,2,3]
+        q[0] = 2
+        np.testing.assert_allclose(q.to_base_units().magnitude, [2.0, 2.0, 3.0])
+        q[:2] = [2, 3]
+        np.testing.assert_allclose(q.to_base_units().magnitude, [2.0, 3.0, 3.0])
+
+    def test_setitem_python_arrayquantity(self, ureg: UnitRegistry) -> None:
+        a = ArrayQuantity(np.array([1000.0, 2000.0, 3000.0]), "ms/s", ureg)
+        a[0] = 2
+        np.testing.assert_allclose(a.to_base_units().magnitude, [2.0, 2.0, 3.0])
+
+    def test_dot_bare_list_tracks_units(self, ureg: UnitRegistry) -> None:
+        a = ArrayQuantity(np.array([1000.0, 2000.0, 3000.0]), "ms/s", ureg)
+        result = a.dot([1, 1, 1])
+        assert result.to_base_units().magnitude == pytest.approx(6.0)
+
+
+class TestScalarQuantityPlusArray:
+    """Issue #5: scalar Quantity combined with a bare ndarray must convert a
+    dimensionless-scaled quantity to base units."""
+
+    def test_scalar_plus_ndarray(self, ureg: UnitRegistry) -> None:
+        q = ureg.Quantity(1000, "ms/s")  # base 1
+        np.testing.assert_allclose(
+            (q + np.array([1.0, 2.0])).to_base_units().magnitude, [2.0, 3.0]
+        )
+        np.testing.assert_allclose(
+            (np.array([1.0, 2.0]) - q).to_base_units().magnitude, [0.0, 1.0]
+        )
+
+    def test_scalar_dimensional_plus_ndarray_raises(self, ureg: UnitRegistry) -> None:
+        with pytest.raises(DimensionalityError):
+            _ = ureg.Quantity(5, "meter") + np.array([1.0, 2.0])
+        # Adding zeros is allowed for any dimension.
+        np.testing.assert_allclose(
+            (ureg.Quantity(5, "meter") + np.zeros(2)).magnitude, [5.0, 5.0]
+        )
+
+
+class TestScaledDimensionlessEquality:
+    """Issue #5: == / != against a bare value compare base units."""
+
+    def test_eq_bare_base(self, ureg: UnitRegistry) -> None:
+        # base [0.5, 2, 5], raw stored [500, 2000, 5000]
+        for q in (
+            ureg.Quantity(np.array([500.0, 2000.0, 5000.0]), "ms/s"),
+            ArrayQuantity(np.array([500.0, 2000.0, 5000.0]), "ms/s", ureg),
+        ):
+            np.testing.assert_array_equal(q == [0.5, 2.0, 5.0], [True, True, True])
+            np.testing.assert_array_equal(
+                q == [500.0, 2000.0, 5000.0], [False, False, False]
+            )
+            np.testing.assert_array_equal(
+                q != [500.0, 2000.0, 5000.0], [True, True, True]
+            )
+
+
+class TestNewlyImplementedOps:
+    """Operations pint supports that pintrs previously raised TypeError on."""
+
+    def test_reverse_pow(self, ureg: UnitRegistry) -> None:
+        assert 2 ** ureg.Quantity(2.0, "") == pytest.approx(4.0)
+        # dimensionless-scaled exponent uses its base value
+        assert 2 ** ureg.Quantity(2000.0, "ms/s") == pytest.approx(4.0)
+        with pytest.raises(DimensionalityError):
+            _ = 2 ** ureg.Quantity(2.0, "meter")
+
+    def test_average(self, ureg: UnitRegistry) -> None:
+        a = ArrayQuantity(np.array([1.0, 2.0, 3.0]), "meter", ureg)
+        r = np.average(a, weights=[1, 1, 2])
+        assert r.magnitude == pytest.approx(2.25)
+        assert str(r.units) == "meter"
+
+    def test_insert(self, ureg: UnitRegistry) -> None:
+        a = ArrayQuantity(np.array([1.0, 2.0, 3.0]), "meter", ureg)
+        r = np.insert(a, 1, ureg.Quantity(2.0, "meter"))
+        np.testing.assert_allclose(r.magnitude, [1.0, 2.0, 2.0, 3.0])
+        with pytest.raises(DimensionalityError):
+            _ = np.insert(a, 1, 2)  # bare into dimensional
+
+    def test_nan_to_num(self, ureg: UnitRegistry) -> None:
+        a = ArrayQuantity(np.array([1.0, np.nan, 3.0]), "meter", ureg)
+        np.testing.assert_allclose(np.nan_to_num(a).magnitude, [1.0, 0.0, 3.0])
+
+    def test_fix(self, ureg: UnitRegistry) -> None:
+        a = ArrayQuantity(np.array([2.7, -2.7]), "meter", ureg)
+        np.testing.assert_allclose(np.fix(a).magnitude, [2.0, -2.0])
+
+
+class TestAngularConversionUfuncs:
+    """np.radians/degrees/deg2rad/rad2deg as angular conversions (pint parity)."""
+
+    def test_radians(self, ureg: UnitRegistry) -> None:
+        r = np.radians(ureg.Quantity(np.array([180.0]), "degree"))
+        np.testing.assert_allclose(r.magnitude, [np.pi])
+        assert str(r.units) == "radian"
+
+    def test_degrees(self, ureg: UnitRegistry) -> None:
+        r = np.degrees(ureg.Quantity(np.array([np.pi]), "radian"))
+        np.testing.assert_allclose(r.magnitude, [180.0])
+        assert str(r.units) == "degree"
+
+    def test_dimensionless_treated_as_radians(self, ureg: UnitRegistry) -> None:
+        r = np.degrees(ureg.Quantity(np.array([np.pi]), ""))
+        np.testing.assert_allclose(r.magnitude, [180.0])
+
+    def test_dimensional_raises(self, ureg: UnitRegistry) -> None:
+        with pytest.raises(DimensionalityError):
+            _ = np.radians(ureg.Quantity(np.array([1.0]), "meter"))
+
+
+class TestMoreNumpyFunctions:
+    """Further numpy functions brought to pint parity."""
+
+    def test_conj_preserves_complex(self, ureg: UnitRegistry) -> None:
+        q = ureg.Quantity(np.array([1 + 2j, 3 - 4j]), "meter")
+        np.testing.assert_array_equal(np.conj(q).magnitude, [1 - 2j, 3 + 4j])
+
+    def test_prod_powers_units(self, ureg: UnitRegistry) -> None:
+        q = ureg.Quantity(np.array([1.0, 2.0, 3.0]), "meter")
+        r = np.prod(q)
+        assert r.magnitude == pytest.approx(6.0)
+        assert "meter ** 3" in str(r.units).replace("meter**3", "meter ** 3")
+
+    def test_allclose_quantity_atol(self, ureg: UnitRegistry) -> None:
+        a = ureg.Quantity(np.array([1.0, 2.0]), "meter")
+        b = ureg.Quantity(np.array([1.01, 2.01]), "meter")
+        assert np.allclose(a, b, atol=ureg.Quantity(2.0, "centimeter"))
+        assert not np.allclose(a, b, atol=ureg.Quantity(0.1, "centimeter"))
+
+    def test_unwrap(self, ureg: UnitRegistry) -> None:
+        r = np.unwrap(ureg.Quantity(np.array([0.0, 4.0, 8.0]), "radian"))
+        assert str(r.units) == "radian"
+
+    def test_searchsorted_free_converts(self, ureg: UnitRegistry) -> None:
+        a = ureg.Quantity(np.array([100.0, 200.0, 400.0]), "centimeter")
+        r = np.searchsorted(a, ureg.Quantity(np.array([2.5]), "meter"))
+        np.testing.assert_array_equal(r, [2])
+
+    def test_trapezoid_quantity_dx(self, ureg: UnitRegistry) -> None:
+        trapz = getattr(np, "trapezoid", None) or np.trapz
+        r = trapz(
+            ureg.Quantity(np.array([1.0, 2.0, 3.0]), "meter"),
+            dx=ureg.Quantity(2.0, "second"),
+        )
+        assert r.magnitude == pytest.approx(8.0)
+        units_str = str(r.units)
+        assert "meter" in units_str
+        assert "second" in units_str
+
+
+class TestEinsumAndComplex:
+    def test_einsum_product_units(self, ureg: UnitRegistry) -> None:
+        a = ureg.Quantity(np.array([1.0, 2.0, 3.0]), "meter")
+        b = ureg.Quantity(np.array([4.0, 5.0, 6.0]), "second")
+        r = np.einsum("i,i->", a, b)
+        assert r.magnitude == pytest.approx(32.0)
+        units_str = str(r.units)
+        assert "meter" in units_str
+        assert "second" in units_str
+
+    def test_complex_array_quantity_abs(self, ureg: UnitRegistry) -> None:
+        q = ureg.Quantity(np.array([3 + 4j]), "meter")
+        np.testing.assert_allclose(np.abs(q).magnitude, [5.0])
+
+
+class TestArrayOffsetLogConversion:
+    """Array .to/.to_base_units apply the offset/log transform element-wise,
+    not a bare multiplicative factor (regression for degC/dB arrays)."""
+
+    def test_array_degc_to_kelvin(self, ureg: UnitRegistry) -> None:
+        q = ureg.Quantity(np.array([0.0, 10.0]), "degC").to("kelvin")
+        np.testing.assert_allclose(q.magnitude, [273.15, 283.15])
+
+    def test_array_degc_to_base_units(self, ureg: UnitRegistry) -> None:
+        q = ureg.Quantity(np.array([0.0, 10.0]), "degC").to_base_units()
+        np.testing.assert_allclose(q.magnitude, [273.15, 283.15])
+
+    def test_array_dbw_to_watt(self, ureg: UnitRegistry) -> None:
+        q = ureg.Quantity(np.array([0.0, 10.0]), "dBW").to("watt")
+        np.testing.assert_allclose(q.magnitude, [1.0, 10.0])
+
+    def test_python_array_quantity_degc(self, ureg: UnitRegistry) -> None:
+        # 2D forces the pure-Python ArrayQuantity backend.
+        aq = ArrayQuantity(np.array([[0.0, 10.0]]), "degC", ureg)
+        np.testing.assert_allclose(aq.to("kelvin").magnitude, [[273.15, 283.15]])
+
+    def test_array_ordinary_unit_unaffected(self, ureg: UnitRegistry) -> None:
+        q = ureg.Quantity(np.array([1.0, 2.0]), "km").to("m")
+        np.testing.assert_allclose(q.magnitude, [1000.0, 2000.0])
+
+
+class TestOffsetUnitNdarrayDirectional:
+    """pint forbids offset-unit `*`/`/` only when the offset operand is on the
+    left (the operation is initiated on it); when a bare ndarray is on the left
+    the numpy ufunc path keeps it elementwise. pintrs matches that asymmetry."""
+
+    def test_offset_on_left_raises(self, ureg: UnitRegistry) -> None:
+        from pintrs import OffsetUnitCalculusError
+
+        nd = np.array([1.0, 2.0])
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = ureg.Quantity(10.0, "degC") * nd
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = ureg.Quantity(10.0, "degC") / nd
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = ureg.Unit("degC") * nd
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = ureg.Quantity(np.array([1.0, 2.0]), "meter") / ureg.Unit("degC")
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = ureg.Quantity(2.0, "degC") / ureg.Quantity(np.array([1.0, 2.0]), "m")
+
+    def test_ndarray_on_left_allowed(self, ureg: UnitRegistry) -> None:
+        nd = np.array([1.0, 2.0])
+        np.testing.assert_allclose(
+            (nd * ureg.Quantity(10.0, "degC")).magnitude, [10, 20]
+        )
+        np.testing.assert_allclose(
+            (nd / ureg.Quantity(10.0, "degC")).magnitude, [0.1, 0.2]
+        )
+        np.testing.assert_allclose((nd * ureg.Unit("degC")).magnitude, [1, 2])
+        np.testing.assert_allclose((ureg.Unit("degC") / nd).magnitude, [1, 0.5])
+
+    def test_ordinary_unit_ndarray_unaffected(self, ureg: UnitRegistry) -> None:
+        nd = np.array([1.0, 2.0])
+        np.testing.assert_allclose((ureg.Quantity(10.0, "m") * nd).magnitude, [10, 20])
+        np.testing.assert_allclose((ureg.Quantity(10.0, "m") / nd).magnitude, [10, 5])
+        np.testing.assert_allclose((ureg.Unit("m") * nd).magnitude, [1, 2])
+
+    def test_list_left_offset_raises(self, ureg: UnitRegistry) -> None:
+        # A list/tuple on the left uses ordinary operator dispatch (not the numpy
+        # ufunc path), so the offset rule applies and pint raises.
+        from pintrs import OffsetUnitCalculusError
+
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = [1, 2] * ureg.Quantity(10.0, "degC")
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = [1, 2] / ureg.Quantity(10.0, "degC")
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = (1, 2) * ureg.Quantity(10.0, "degC")
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = [1, 2] * ureg.Unit("degC")
+
+    def test_list_left_ordinary_unaffected(self, ureg: UnitRegistry) -> None:
+        got = ([1, 2] * ureg.Quantity(10.0, "m")).magnitude
+        np.testing.assert_allclose(got, [10, 20])
+        got = ([1, 2] / ureg.Quantity(10.0, "m")).magnitude
+        np.testing.assert_allclose(got, [0.1, 0.2])
+
+    def test_np_power_offset_base_raises(self, ureg: UnitRegistry) -> None:
+        # np.power mirrors the scalar `**` rule: an offset/log base to a power
+        # other than 0 or 1 is ambiguous.
+        from pintrs import OffsetUnitCalculusError
+
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = np.power(ureg.Quantity(10.0, "degC"), 2)
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = np.power(ureg.Quantity(np.array([1.0, 2.0]), "degC"), 2)
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = np.power(ureg.Quantity(3.0, "dB"), 2)
+        assert np.power(ureg.Quantity(10.0, "degC"), 1).magnitude == pytest.approx(10.0)
+        assert np.power(ureg.Quantity(10.0, "degC"), 0).magnitude == pytest.approx(1.0)
+        assert np.power(ureg.Quantity(10.0, "m"), 2).magnitude == pytest.approx(100.0)
+
+
+class TestArrayHandlerOffsetLog:
+    """Free-function handlers that combine arrays into one unit apply the
+    offset/log transform (32 degF -> 0 degC), matching pint."""
+
+    def test_concatenate_offset(self, ureg: UnitRegistry) -> None:
+        r = np.concatenate(
+            [
+                ureg.Quantity(np.array([0.0]), "degC"),
+                ureg.Quantity(np.array([32.0]), "degF"),
+            ]
+        )
+        # 32 degF == 0 degC (atol covers the offset-roundtrip fp noise).
+        np.testing.assert_allclose(r.magnitude, [0.0, 0.0], atol=1e-9)
+
+    def test_append_log(self, ureg: UnitRegistry) -> None:
+        r = np.concatenate(
+            [
+                ureg.Quantity(np.array([0.0]), "dBW"),
+                ureg.Quantity(np.array([10.0]), "watt"),
+            ]
+        )
+        np.testing.assert_allclose(r.magnitude, [0.0, 10.0])
+
+    def test_insert_offset(self, ureg: UnitRegistry) -> None:
+        r = np.insert(
+            ureg.Quantity(np.array([0.0, 100.0]), "degC"),
+            1,
+            ureg.Quantity(32.0, "degF"),
+        )
+        np.testing.assert_allclose(r.magnitude, [0.0, 0.0, 100.0], atol=1e-9)
+
+    def test_ordinary_handler_unaffected(self, ureg: UnitRegistry) -> None:
+        r = np.concatenate(
+            [ureg.Quantity(np.array([1.0]), "m"), ureg.Quantity(np.array([2.0]), "km")]
+        )
+        np.testing.assert_allclose(r.magnitude, [1.0, 2000.0])
+
+
+class TestArrayAdditiveOffsetCalculus:
+    """Array `+`/`-` follow pint's offset/log calculus: abs+abs raises,
+    abs-abs yields a delta, abs+delta stays absolute."""
+
+    def test_offset_plus_offset_raises(self, ureg: UnitRegistry) -> None:
+        from pintrs import OffsetUnitCalculusError
+
+        a = ureg.Quantity(np.array([10.0, 20.0]), "degC")
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = a + a
+
+    def test_log_plus_log_raises(self, ureg: UnitRegistry) -> None:
+        from pintrs import OffsetUnitCalculusError
+
+        a = ureg.Quantity(np.array([10.0]), "dB")
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = a + a
+
+    def test_offset_minus_offset_is_delta(self, ureg: UnitRegistry) -> None:
+        r = ureg.Quantity(np.array([10.0]), "degC") - ureg.Quantity(
+            np.array([5.0]), "degC"
+        )
+        np.testing.assert_allclose(r.magnitude, [5.0])
+        assert "delta" in str(r.units)
+
+    def test_offset_plus_delta_stays_absolute(self, ureg: UnitRegistry) -> None:
+        r = ureg.Quantity(np.array([10.0]), "degC") + ureg.Quantity(
+            np.array([5.0]), "delta_degC"
+        )
+        np.testing.assert_allclose(r.magnitude, [15.0])
+        assert str(r.units) == "degree_Celsius"

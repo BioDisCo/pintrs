@@ -68,6 +68,20 @@ pub(crate) fn to_py_err(e: Box<PintError>) -> PyErr {
     }
 }
 
+/// Convert a registry `PintResult` into a `PyResult`, mapping the domain error
+/// to its Python exception. Lets call sites write `reg.foo(..).to_py()?` instead
+/// of the noisier `reg.foo(..).map_err(to_py_err)?`.
+pub(crate) trait PintResultExt<T> {
+    fn to_py(self) -> PyResult<T>;
+}
+
+impl<T> PintResultExt<T> for errors::PintResult<T> {
+    #[inline]
+    fn to_py(self) -> PyResult<T> {
+        self.map_err(to_py_err)
+    }
+}
+
 // --- UnitRegistry ---
 
 #[pyclass(name = "UnitRegistry", module = "pintrs._core", subclass)]
@@ -82,7 +96,7 @@ impl PyUnitRegistry {
     #[new]
     #[pyo3(signature = (**kwargs))]
     fn new(_py: Python<'_>, kwargs: Option<Bound<'_, pyo3::types::PyDict>>) -> PyResult<Self> {
-        let reg = RustRegistry::new().map_err(to_py_err)?;
+        let reg = RustRegistry::new().to_py()?;
         let stored: Option<PyObject> = kwargs.map(|d| d.unbind().into_any());
         Ok(Self {
             inner: Arc::new(Mutex::new(reg)),
@@ -102,7 +116,7 @@ impl PyUnitRegistry {
         let this = slf.borrow();
         let units_str = units.unwrap_or("dimensionless");
         let mut reg = this.inner.lock().unwrap();
-        let uc = reg.parse_unit_expr(units_str).map_err(to_py_err)?;
+        let uc = reg.parse_unit_expr(units_str).to_py()?;
         let cached = OnceCell::new();
         let _ = cached.set(slf.as_any().clone().unbind());
         Ok(PyQuantity {
@@ -129,10 +143,10 @@ impl PyUnitRegistry {
             return match units {
                 Some(u) => {
                     let mut reg = this.inner.lock().unwrap();
-                    let dst = reg.parse_unit_expr(u).map_err(to_py_err)?;
+                    let dst = reg.parse_unit_expr(u).to_py()?;
                     let new_mag = reg
                         .convert(other_q.magnitude, &other_q.units, &dst)
-                        .map_err(to_py_err)?;
+                        .to_py()?;
                     let cached = OnceCell::new();
                     let _ = cached.set(reg_obj);
                     Ok(PyQuantity {
@@ -171,7 +185,7 @@ impl PyUnitRegistry {
         let mag: f64 = value.extract()?;
         let units_str = units.unwrap_or("dimensionless");
         let mut reg = this.inner.lock().unwrap();
-        let uc = reg.parse_unit_expr(units_str).map_err(to_py_err)?;
+        let uc = reg.parse_unit_expr(units_str).to_py()?;
         let cached = OnceCell::new();
         let _ = cached.set(reg_obj);
         Ok(PyQuantity {
@@ -186,7 +200,7 @@ impl PyUnitRegistry {
     #[pyo3(name = "Unit")]
     fn unit(&self, units: &str) -> PyResult<PyUnit> {
         let mut reg = self.inner.lock().unwrap();
-        let uc = reg.parse_unit_expr(units).map_err(to_py_err)?;
+        let uc = reg.parse_unit_expr(units).to_py()?;
         Ok(PyUnit {
             units: uc,
             registry: Arc::clone(&self.inner),
@@ -208,7 +222,7 @@ impl PyUnitRegistry {
         let units = if unit_str.is_empty() {
             UnitsContainer::new()
         } else {
-            reg.parse_unit_expr(unit_str).map_err(to_py_err)?
+            reg.parse_unit_expr(unit_str).to_py()?
         };
         Ok(PyQuantity {
             magnitude,
@@ -227,9 +241,9 @@ impl PyUnitRegistry {
     #[pyo3(name = "convert")]
     fn convert_val(&self, value: f64, src: &str, dst: &str) -> PyResult<f64> {
         let mut reg = self.inner.lock().unwrap();
-        let src_uc = reg.parse_unit_expr(src).map_err(to_py_err)?;
-        let dst_uc = reg.parse_unit_expr(dst).map_err(to_py_err)?;
-        reg.convert(value, &src_uc, &dst_uc).map_err(to_py_err)
+        let src_uc = reg.parse_unit_expr(src).to_py()?;
+        let dst_uc = reg.parse_unit_expr(dst).to_py()?;
+        reg.convert(value, &src_uc, &dst_uc).to_py()
     }
 
     /// Define a new unit at runtime: ureg.define("smoot = 1.7018 * meter")
@@ -239,7 +253,7 @@ impl PyUnitRegistry {
         for def in defs {
             match def {
                 crate::definition::Definition::Unit(u) => {
-                    reg.define_unit(&u).map_err(to_py_err)?;
+                    reg.define_unit(&u).to_py()?;
                 }
                 crate::definition::Definition::Prefix(p) => {
                     reg.define_prefix(&p);
@@ -253,40 +267,56 @@ impl PyUnitRegistry {
     /// Get compatible units for a given unit
     fn get_compatible_units(&self, unit: &str) -> PyResult<Vec<String>> {
         let mut reg = self.inner.lock().unwrap();
-        let uc = reg.parse_unit_expr(unit).map_err(to_py_err)?;
-        let dim = reg.get_dimensionality(&uc).map_err(to_py_err)?;
+        let uc = reg.parse_unit_expr(unit).to_py()?;
+        let dim = reg.get_dimensionality(&uc).to_py()?;
         Ok(reg.get_units_by_dimensionality(&dim))
+    }
+
+    /// Internal: whether a unit expression is non-multiplicative (offset or
+    /// logarithmic), so the Python array wrapper applies the proper transform.
+    fn _is_non_multiplicative(&self, unit: &str) -> PyResult<bool> {
+        let mut reg = self.inner.lock().unwrap();
+        let uc = reg.parse_unit_expr(unit).to_py()?;
+        Ok(reg.is_non_multiplicative(&uc))
+    }
+
+    /// Whether `unit` involves a logarithmic unit (e.g. `dB`, `dBW`). Used by
+    /// the Python layer to classify offset (affine) vs logarithmic conversions
+    /// when applying them to complex magnitudes.
+    fn _is_log_unit(&self, unit: &str) -> PyResult<bool> {
+        let mut reg = self.inner.lock().unwrap();
+        let uc = reg.parse_unit_expr(unit).to_py()?;
+        Ok(reg.has_log_units(&uc))
     }
 
     /// Internal: get conversion factor (used by Python wrapper)
     fn _get_conversion_factor(&self, src: &str, dst: &str) -> PyResult<f64> {
         let mut reg = self.inner.lock().unwrap();
-        let src_uc = reg.parse_unit_expr(src).map_err(to_py_err)?;
-        let dst_uc = reg.parse_unit_expr(dst).map_err(to_py_err)?;
-        reg.get_conversion_factor(&src_uc, &dst_uc)
-            .map_err(to_py_err)
+        let src_uc = reg.parse_unit_expr(src).to_py()?;
+        let dst_uc = reg.parse_unit_expr(dst).to_py()?;
+        reg.get_conversion_factor(&src_uc, &dst_uc).to_py()
     }
 
     /// Internal: get root units representation
     fn _get_root_units(&self, unit: &str) -> PyResult<(f64, String)> {
         let mut reg = self.inner.lock().unwrap();
-        let uc = reg.parse_unit_expr(unit).map_err(to_py_err)?;
-        let (factor, root) = reg.get_root_units(&uc).map_err(to_py_err)?;
+        let uc = reg.parse_unit_expr(unit).to_py()?;
+        let (factor, root) = reg.get_root_units(&uc).to_py()?;
         Ok((factor, reg.format_units(&root)))
     }
 
     /// Internal: get dimensionality string
     fn _get_dimensionality(&self, unit: &str) -> PyResult<String> {
         let mut reg = self.inner.lock().unwrap();
-        let uc = reg.parse_unit_expr(unit).map_err(to_py_err)?;
-        let dim = reg.get_dimensionality(&uc).map_err(to_py_err)?;
+        let uc = reg.parse_unit_expr(unit).to_py()?;
+        let dim = reg.get_dimensionality(&uc).to_py()?;
         Ok(dim.to_string())
     }
 
     /// Internal: format units
     fn _format_units(&self, unit: &str) -> PyResult<String> {
         let mut reg = self.inner.lock().unwrap();
-        let uc = reg.parse_unit_expr(unit).map_err(to_py_err)?;
+        let uc = reg.parse_unit_expr(unit).to_py()?;
         Ok(reg.format_units(&uc))
     }
 
@@ -299,8 +329,8 @@ impl PyUnitRegistry {
     /// Get the base units for a unit expression. Returns (factor, Unit).
     fn get_base_units(&self, unit: &str) -> PyResult<(f64, PyUnit)> {
         let mut reg = self.inner.lock().unwrap();
-        let uc = reg.parse_unit_expr(unit).map_err(to_py_err)?;
-        let (factor, root) = reg.get_root_units(&uc).map_err(to_py_err)?;
+        let uc = reg.parse_unit_expr(unit).to_py()?;
+        let (factor, root) = reg.get_root_units(&uc).to_py()?;
         Ok((
             factor,
             PyUnit {
@@ -324,23 +354,23 @@ impl PyUnitRegistry {
     /// Get the canonical name for a unit.
     fn get_name(&self, unit: &str) -> PyResult<String> {
         let reg = self.inner.lock().unwrap();
-        reg.get_canonical_name(unit).map_err(to_py_err)
+        reg.get_canonical_name(unit).to_py()
     }
 
     /// Get the symbol for a unit.
     fn get_symbol(&self, unit: &str) -> PyResult<String> {
         let reg = self.inner.lock().unwrap();
-        let canonical = reg.get_canonical_name(unit).map_err(to_py_err)?;
+        let canonical = reg.get_canonical_name(unit).to_py()?;
         Ok(reg.get_display_name(&canonical, true))
     }
 
     /// Check if two unit expressions are dimensionally compatible.
     fn is_compatible_with(&self, unit1: &str, unit2: &str) -> PyResult<bool> {
         let mut reg = self.inner.lock().unwrap();
-        let uc1 = reg.parse_unit_expr(unit1).map_err(to_py_err)?;
-        let uc2 = reg.parse_unit_expr(unit2).map_err(to_py_err)?;
-        let dim1 = reg.get_dimensionality(&uc1).map_err(to_py_err)?;
-        let dim2 = reg.get_dimensionality(&uc2).map_err(to_py_err)?;
+        let uc1 = reg.parse_unit_expr(unit1).to_py()?;
+        let uc2 = reg.parse_unit_expr(unit2).to_py()?;
+        let dim1 = reg.get_dimensionality(&uc1).to_py()?;
+        let dim2 = reg.get_dimensionality(&uc2).to_py()?;
         Ok(dim1 == dim2)
     }
 
@@ -415,7 +445,7 @@ impl PyUnitRegistry {
                 name
             )));
         }
-        let uc = reg.parse_unit_expr(name).map_err(to_py_err)?;
+        let uc = reg.parse_unit_expr(name).to_py()?;
         let cached = OnceCell::new();
         let _ = cached.set(slf.as_any().clone().unbind());
         Ok(PyUnit {
@@ -464,12 +494,205 @@ impl Clone for PyQuantity {
     }
 }
 
+impl PyQuantity {
+    /// Build a `Quantity` from its parts, with both caches empty. Centralises
+    /// the construction boilerplate shared by every arithmetic operator.
+    #[inline]
+    pub(crate) fn from_parts(
+        magnitude: f64,
+        units: UnitsContainer,
+        registry: SharedRegistry,
+    ) -> Self {
+        Self {
+            magnitude,
+            units,
+            registry,
+            cached_dim: OnceCell::new(),
+            cached_registry_obj: OnceCell::new(),
+        }
+    }
+
+    /// Build a new `Quantity` sharing this one's registry. The common case for
+    /// operators that produce a result in the same registry as `self`.
+    #[inline]
+    fn rebuild(&self, magnitude: f64, units: UnitsContainer) -> Self {
+        Self::from_parts(magnitude, units, Arc::clone(&self.registry))
+    }
+
+    /// Adopt the magnitude and units of `q` in place. Lets each `ito_*` (the
+    /// in-place conversions) delegate to its `to_*` counterpart instead of
+    /// re-implementing the conversion.
+    #[inline]
+    fn assign_from(&mut self, q: PyQuantity) {
+        self.magnitude = q.magnitude;
+        self.units = q.units;
+    }
+
+    /// `self`'s value expressed as a plain (empty) dimensionless number.
+    ///
+    /// Used by operations that mix in a bare Python number (floor-divide, modulo,
+    /// ordered comparisons, dimensionless add/sub): pint requires the quantity to
+    /// be dimensionless and operates on its value in base units, not the
+    /// intermediate (scaled) units such as `cm*s/m/ms`. The conversion is
+    /// offset/log-aware, so a logarithmic-but-dimensionless unit like `dB` yields
+    /// its linear value (`1 dB -> 10**0.1`), matching pint. Returns
+    /// `DimensionalityError` if `self` is not dimensionless.
+    fn dimensionless_value(&self) -> PyResult<f64> {
+        let mut reg = self.registry.lock().unwrap();
+        let dim = reg.get_dimensionality(&self.units).to_py()?;
+        if !dim.is_empty() {
+            return Err(DimensionalityError::new_err(
+                "Cannot operate with a dimensioned quantity and a bare number",
+            ));
+        }
+        reg.convert(self.magnitude, &self.units, &UnitsContainer::new())
+            .to_py()
+    }
+
+    /// Multiplicative factor from `self.units` to plain dimensionless units.
+    /// Like [`dimensionless_value`](Self::dimensionless_value) but returns the
+    /// scale, for the one caller (`quantity % number`) that must convert a
+    /// base-unit result back into `self.units`. Multiplicative only.
+    fn require_dimensionless_factor(&self) -> PyResult<f64> {
+        let mut reg = self.registry.lock().unwrap();
+        let dim = reg.get_dimensionality(&self.units).to_py()?;
+        if !dim.is_empty() {
+            return Err(DimensionalityError::new_err(
+                "Cannot operate with a dimensioned quantity and a bare number",
+            ));
+        }
+        reg.get_conversion_factor(&self.units, &UnitsContainer::new())
+            .to_py()
+    }
+
+    /// Raise `OffsetUnitCalculusError` if `units` is non-multiplicative (an
+    /// offset unit such as `degC` or a logarithmic unit such as `dB`). pint
+    /// forbids these from taking part in multiplication, division, or a power
+    /// other than 0 or 1. Pass `&self.units` to guard the receiver, or an
+    /// operand's units to guard the other side. `delta_*` units are
+    /// multiplicative and pass.
+    fn ensure_multiplicative(&self, units: &UnitsContainer) -> PyResult<()> {
+        let reg = self.registry.lock().unwrap();
+        ensure_units_multiplicative(&reg, units)
+    }
+
+    /// Shared body of the ordered comparisons (`<`, `<=`, `>`, `>=`). Another
+    /// quantity is compared in `self`'s units (offset/log-aware via `convert`),
+    /// and a bare number requires `self` to be dimensionless and uses its base
+    /// value. `cmp` is the concrete operator.
+    fn compare_ordered(
+        &self,
+        other: &Bound<'_, PyAny>,
+        cmp: fn(f64, f64) -> bool,
+    ) -> PyResult<bool> {
+        if let Ok(other_q) = other.extract::<PyQuantity>() {
+            if self.units == other_q.units {
+                return Ok(cmp(self.magnitude, other_q.magnitude));
+            }
+            let mut reg = self.registry.lock().unwrap();
+            let converted = reg
+                .convert(other_q.magnitude, &other_q.units, &self.units)
+                .to_py()?;
+            Ok(cmp(self.magnitude, converted))
+        } else if let Ok(val) = other.extract::<f64>() {
+            if val == 0.0 {
+                return Ok(cmp(self.magnitude, 0.0));
+            }
+            let value = self.dimensionless_value()?;
+            Ok(cmp(value, val))
+        } else {
+            Err(PyTypeError::new_err(
+                "Cannot compare Quantity with non-Quantity",
+            ))
+        }
+    }
+}
+
+/// Raise `OffsetUnitCalculusError` if `units` is non-multiplicative (offset or
+/// logarithmic). Shared across `Quantity`, `Unit` and array arithmetic so that
+/// an offset operand on either side of `*`/`/`/`**` is rejected the way pint
+/// does.
+pub(crate) fn ensure_units_multiplicative(
+    reg: &RustRegistry,
+    units: &UnitsContainer,
+) -> PyResult<()> {
+    if reg.is_non_multiplicative(units) {
+        return Err(OffsetUnitCalculusError::new_err(format!(
+            "Ambiguous operation with offset unit ({units}, dimensionless)"
+        )));
+    }
+    Ok(())
+}
+
+/// Return (and memoise) the Python `UnitRegistry` wrapper for a shared registry.
+/// Shared by the `_registry` getter on `Quantity`, `Unit` and `RustArrayQuantity`,
+/// which all cache the wrapper in a `OnceCell` to avoid rebuilding it.
+pub(crate) fn registry_pyobject(
+    py: Python<'_>,
+    registry: &SharedRegistry,
+    cache: &OnceCell<PyObject>,
+) -> PyResult<PyObject> {
+    if let Some(cached) = cache.get() {
+        return Ok(cached.clone_ref(py));
+    }
+    let reg = PyUnitRegistry {
+        inner: Arc::clone(registry),
+        _init_kwargs: None,
+    };
+    let obj = reg.into_pyobject(py)?.into_any().unbind();
+    let _ = cache.set(obj.clone_ref(py));
+    Ok(obj)
+}
+
+/// Floating-point `divmod` matching CPython's `float.__divmod__` exactly, so
+/// `//` and `%` agree with Python (and pint) for negative operands, infinities
+/// and signed zeros. Returns `(floordiv, mod)`.
+///
+/// Unlike Rust's `%` / `fmod` (sign of the dividend), the remainder takes the
+/// sign of the divisor; infinite divisors and `inf // finite` are handled the
+/// way CPython does rather than producing a stray `inf`/`NaN`.
+fn py_divmod(a: f64, b: f64) -> (f64, f64) {
+    let mut m = a % b;
+    let mut d = (a - m) / b;
+    if m != 0.0 {
+        if (b < 0.0) != (m < 0.0) {
+            m += b;
+            d -= 1.0;
+        }
+    } else {
+        m = 0.0_f64.copysign(b);
+    }
+    let floordiv = if d != 0.0 {
+        let fl = d.floor();
+        if d - fl > 0.5 {
+            fl + 1.0
+        } else {
+            fl
+        }
+    } else {
+        0.0_f64.copysign(a / b)
+    };
+    (floordiv, m)
+}
+
+/// Python/pint-style floored modulo (sign of the divisor).
+#[inline]
+fn floored_mod(a: f64, b: f64) -> f64 {
+    py_divmod(a, b).1
+}
+
+/// Python/pint-style floor division.
+#[inline]
+fn floored_div(a: f64, b: f64) -> f64 {
+    py_divmod(a, b).0
+}
+
 #[pymethods]
 impl PyQuantity {
     #[new]
     #[pyo3(signature = (value, units=None))]
     fn new(value: &Bound<'_, PyAny>, units: Option<&str>) -> PyResult<Self> {
-        let reg = RustRegistry::new().map_err(to_py_err)?;
+        let reg = RustRegistry::new().to_py()?;
         let shared = Arc::new(Mutex::new(reg));
 
         // Quantity(Quantity, new_units)
@@ -478,10 +701,8 @@ impl PyQuantity {
                 Some(u) => {
                     let (new_mag, dst) = {
                         let mut r = shared.lock().unwrap();
-                        let dst = r.parse_unit_expr(u).map_err(to_py_err)?;
-                        let new_mag = r
-                            .convert(other_q.magnitude, &other_q.units, &dst)
-                            .map_err(to_py_err)?;
+                        let dst = r.parse_unit_expr(u).to_py()?;
+                        let new_mag = r.convert(other_q.magnitude, &other_q.units, &dst).to_py()?;
                         (new_mag, dst)
                     };
                     Ok(Self {
@@ -515,7 +736,7 @@ impl PyQuantity {
                 .map_err(|_| PyValueError::new_err(format!("Cannot parse magnitude: '{}'", mag)))?;
             let uc = {
                 let mut r = shared.lock().unwrap();
-                r.parse_unit_expr(unit_str).map_err(to_py_err)?
+                r.parse_unit_expr(unit_str).to_py()?
             };
             return Ok(Self {
                 magnitude,
@@ -531,7 +752,7 @@ impl PyQuantity {
         let units_str = units.unwrap_or("dimensionless");
         let uc = {
             let mut r = shared.lock().unwrap();
-            r.parse_unit_expr(units_str).map_err(to_py_err)?
+            r.parse_unit_expr(units_str).to_py()?
         };
         Ok(Self {
             magnitude: mag,
@@ -549,21 +770,12 @@ impl PyQuantity {
 
     #[getter]
     fn m(&self) -> f64 {
-        self.magnitude
+        self.magnitude()
     }
 
     #[getter]
     fn _registry(&self, py: Python<'_>) -> PyResult<PyObject> {
-        if let Some(cached) = self.cached_registry_obj.get() {
-            return Ok(cached.clone_ref(py));
-        }
-        let reg = PyUnitRegistry {
-            inner: Arc::clone(&self.registry),
-            _init_kwargs: None,
-        };
-        let obj = reg.into_pyobject(py)?.into_any().unbind();
-        let _ = self.cached_registry_obj.set(obj.clone_ref(py));
-        Ok(obj)
+        registry_pyobject(py, &self.registry, &self.cached_registry_obj)
     }
 
     #[getter]
@@ -577,11 +789,7 @@ impl PyQuantity {
 
     #[getter]
     fn u(&self) -> PyUnit {
-        PyUnit {
-            units: self.units.clone(),
-            registry: Arc::clone(&self.registry),
-            cached_registry_obj: OnceCell::new(),
-        }
+        self.units()
     }
 
     fn m_as(&self, units: &Bound<'_, PyAny>) -> PyResult<f64> {
@@ -596,41 +804,30 @@ impl PyQuantity {
 
     fn _to(&self, units: &str) -> PyResult<PyQuantity> {
         let mut reg = self.registry.lock().unwrap();
-        let dst = reg.parse_unit_expr(units).map_err(to_py_err)?;
-        let new_mag = reg
-            .convert(self.magnitude, &self.units, &dst)
-            .map_err(to_py_err)?;
-        Ok(PyQuantity {
-            magnitude: new_mag,
-            units: dst,
-            registry: Arc::clone(&self.registry),
-            cached_dim: OnceCell::new(),
-            cached_registry_obj: OnceCell::new(),
-        })
+        let dst = reg.parse_unit_expr(units).to_py()?;
+        let new_mag = reg.convert(self.magnitude, &self.units, &dst).to_py()?;
+        Ok(self.rebuild(new_mag, dst))
     }
 
     fn ito(&mut self, units: &Bound<'_, PyAny>) -> PyResult<()> {
         let units_str = extract_units_string(units)?;
-        let mut reg = self.registry.lock().unwrap();
-        let dst = reg.parse_unit_expr(&units_str).map_err(to_py_err)?;
-        let new_mag = reg
-            .convert(self.magnitude, &self.units, &dst)
-            .map_err(to_py_err)?;
-        self.magnitude = new_mag;
-        self.units = dst;
+        let q = self._to(&units_str)?;
+        self.assign_from(q);
         Ok(())
     }
 
     fn to_base_units(&self) -> PyResult<PyQuantity> {
         let mut reg = self.registry.lock().unwrap();
-        let (factor, root_units) = reg.get_root_units(&self.units).map_err(to_py_err)?;
-        Ok(PyQuantity {
-            magnitude: self.magnitude * factor,
-            units: root_units,
-            registry: Arc::clone(&self.registry),
-            cached_dim: OnceCell::new(),
-            cached_registry_obj: OnceCell::new(),
-        })
+        let (factor, root_units) = reg.get_root_units(&self.units).to_py()?;
+        // Offset (non-multiplicative) units like degC must apply their offset when
+        // converting to base units, not just the multiplicative factor.
+        let magnitude = if reg.has_offset_units(&self.units) || reg.has_log_units(&self.units) {
+            reg.convert(self.magnitude, &self.units, &root_units)
+                .to_py()?
+        } else {
+            self.magnitude * factor
+        };
+        Ok(self.rebuild(magnitude, root_units))
     }
 
     fn to_root_units(&self) -> PyResult<PyQuantity> {
@@ -638,10 +835,8 @@ impl PyQuantity {
     }
 
     fn ito_base_units(&mut self) -> PyResult<()> {
-        let mut reg = self.registry.lock().unwrap();
-        let (factor, root_units) = reg.get_root_units(&self.units).map_err(to_py_err)?;
-        self.magnitude *= factor;
-        self.units = root_units;
+        let q = self.to_base_units()?;
+        self.assign_from(q);
         Ok(())
     }
 
@@ -656,10 +851,8 @@ impl PyQuantity {
 
         // If a target unit is given, convert to that first, then compact
         let (mag, units) = if let Some(u) = unit {
-            let dst = reg.parse_unit_expr(u).map_err(to_py_err)?;
-            let m = reg
-                .convert(self.magnitude, &self.units, &dst)
-                .map_err(to_py_err)?;
+            let dst = reg.parse_unit_expr(u).to_py()?;
+            let m = reg.convert(self.magnitude, &self.units, &dst).to_py()?;
             (m, dst)
         } else {
             (self.magnitude, self.units.clone())
@@ -667,24 +860,12 @@ impl PyQuantity {
 
         // Only compact single-unit quantities
         if units.len() != 1 {
-            return Ok(PyQuantity {
-                magnitude: mag,
-                units,
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            });
+            return Ok(self.rebuild(mag, units));
         }
 
         let (unit_name, &exp) = units.iter().next().unwrap();
         if (exp - 1.0).abs() > f64::EPSILON {
-            return Ok(PyQuantity {
-                magnitude: mag,
-                units,
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            });
+            return Ok(self.rebuild(mag, units));
         }
 
         // SI decimal prefixes only (exclude binary kibi/mebi/etc. and oddities like semi/sesqui)
@@ -717,13 +898,7 @@ impl PyQuantity {
 
         let abs_mag = mag.abs();
         if abs_mag == 0.0 {
-            return Ok(PyQuantity {
-                magnitude: mag,
-                units,
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            });
+            return Ok(self.rebuild(mag, units));
         }
 
         let mut best_prefix = "";
@@ -748,27 +923,13 @@ impl PyQuantity {
 
         let best_factor = match best_factor {
             Some(f) => f,
-            None => {
-                return Ok(PyQuantity {
-                    magnitude: mag,
-                    units,
-                    registry: Arc::clone(&self.registry),
-                    cached_dim: OnceCell::new(),
-                    cached_registry_obj: OnceCell::new(),
-                })
-            }
+            None => return Ok(self.rebuild(mag, units)),
         };
 
         let new_unit_name = format!("{}{}", best_prefix, unit_name);
         let new_mag = mag / best_factor;
         let new_units = UnitsContainer::from_single(new_unit_name, 1.0);
-        Ok(PyQuantity {
-            magnitude: new_mag,
-            units: new_units,
-            registry: Arc::clone(&self.registry),
-            cached_dim: OnceCell::new(),
-            cached_registry_obj: OnceCell::new(),
-        })
+        Ok(self.rebuild(new_mag, new_units))
     }
 
     /// Reduce compound units to their simplest form.
@@ -787,58 +948,30 @@ impl PyQuantity {
         let preferred = match preferred_units {
             Some(p) if !p.is_empty() => p,
             _ => {
-                let (factor, root_units) = reg.get_root_units(&self.units).map_err(to_py_err)?;
-                return Ok(PyQuantity {
-                    magnitude: self.magnitude * factor,
-                    units: root_units,
-                    registry: Arc::clone(&self.registry),
-                    cached_dim: OnceCell::new(),
-                    cached_registry_obj: OnceCell::new(),
-                });
+                let (factor, root_units) = reg.get_root_units(&self.units).to_py()?;
+                return Ok(self.rebuild(self.magnitude * factor, root_units));
             }
         };
-        let self_dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
+        let self_dim = reg.get_dimensionality(&self.units).to_py()?;
 
         for pref in &preferred {
-            let pref_uc = reg.parse_unit_expr(pref).map_err(to_py_err)?;
-            let pref_dim = reg.get_dimensionality(&pref_uc).map_err(to_py_err)?;
+            let pref_uc = reg.parse_unit_expr(pref).to_py()?;
+            let pref_dim = reg.get_dimensionality(&pref_uc).to_py()?;
             if pref_dim == self_dim {
-                let new_mag = reg
-                    .convert(self.magnitude, &self.units, &pref_uc)
-                    .map_err(to_py_err)?;
-                return Ok(PyQuantity {
-                    magnitude: new_mag,
-                    units: pref_uc,
-                    registry: Arc::clone(&self.registry),
-                    cached_dim: OnceCell::new(),
-                    cached_registry_obj: OnceCell::new(),
-                });
+                let new_mag = reg.convert(self.magnitude, &self.units, &pref_uc).to_py()?;
+                return Ok(self.rebuild(new_mag, pref_uc));
             }
         }
 
         // Fall back to base units
-        let (factor, root_units) = reg.get_root_units(&self.units).map_err(to_py_err)?;
-        Ok(PyQuantity {
-            magnitude: self.magnitude * factor,
-            units: root_units,
-            registry: Arc::clone(&self.registry),
-            cached_dim: OnceCell::new(),
-            cached_registry_obj: OnceCell::new(),
-        })
+        let (factor, root_units) = reg.get_root_units(&self.units).to_py()?;
+        Ok(self.rebuild(self.magnitude * factor, root_units))
     }
 
     #[pyo3(signature = (preferred_units=None))]
     fn ito_preferred(&mut self, preferred_units: Option<Vec<String>>) -> PyResult<()> {
-        let result = PyQuantity {
-            magnitude: self.magnitude,
-            units: self.units.clone(),
-            registry: Arc::clone(&self.registry),
-            cached_dim: OnceCell::new(),
-            cached_registry_obj: OnceCell::new(),
-        }
-        .to_preferred(preferred_units)?;
-        self.magnitude = result.magnitude;
-        self.units = result.units;
+        let q = self.to_preferred(preferred_units)?;
+        self.assign_from(q);
         Ok(())
     }
 
@@ -852,31 +985,17 @@ impl PyQuantity {
             // Try to find the base (unprefixed) unit
             let (uf, root) = reg
                 .get_root_units(&UnitsContainer::from_single(unit_name.clone(), 1.0))
-                .map_err(to_py_err)?;
+                .to_py()?;
             factor *= uf.powf(exp);
             new_units = &new_units * &root.pow(exp);
         }
 
-        Ok(PyQuantity {
-            magnitude: self.magnitude * factor,
-            units: new_units,
-            registry: Arc::clone(&self.registry),
-            cached_dim: OnceCell::new(),
-            cached_registry_obj: OnceCell::new(),
-        })
+        Ok(self.rebuild(self.magnitude * factor, new_units))
     }
 
     fn ito_unprefixed(&mut self) -> PyResult<()> {
-        let result = PyQuantity {
-            magnitude: self.magnitude,
-            units: self.units.clone(),
-            registry: Arc::clone(&self.registry),
-            cached_dim: OnceCell::new(),
-            cached_registry_obj: OnceCell::new(),
-        }
-        .to_unprefixed()?;
-        self.magnitude = result.magnitude;
-        self.units = result.units;
+        let q = self.to_unprefixed()?;
+        self.assign_from(q);
         Ok(())
     }
 
@@ -894,7 +1013,7 @@ impl PyQuantity {
         for (name, exp) in items {
             uc = uc.add(&name, exp);
         }
-        let reg = RustRegistry::new().map_err(to_py_err)?;
+        let reg = RustRegistry::new().to_py()?;
         Ok(Self {
             magnitude: mag,
             units: uc,
@@ -925,10 +1044,10 @@ impl PyQuantity {
     /// Convert to datetime.timedelta (for time quantities only).
     fn to_timedelta(&self) -> PyResult<PyObject> {
         let mut reg = self.registry.lock().unwrap();
-        let seconds_uc = reg.parse_unit_expr("second").map_err(to_py_err)?;
+        let seconds_uc = reg.parse_unit_expr("second").to_py()?;
         let seconds = reg
             .convert(self.magnitude, &self.units, &seconds_uc)
-            .map_err(to_py_err)?;
+            .to_py()?;
         Python::with_gil(|py| {
             let datetime = py.import("datetime")?;
             let td = datetime.getattr("timedelta")?.call1((0, seconds))?;
@@ -959,7 +1078,7 @@ impl PyQuantity {
             return Ok(cached.clone());
         }
         let mut reg = self.registry.lock().unwrap();
-        let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
+        let dim = reg.get_dimensionality(&self.units).to_py()?;
         let s = dim.to_string();
         let _ = self.cached_dim.set(s.clone());
         Ok(s)
@@ -978,22 +1097,22 @@ impl PyQuantity {
 
     fn check(&self, dimension: &str) -> PyResult<bool> {
         let mut reg = self.registry.lock().unwrap();
-        let self_dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
+        let self_dim = reg.get_dimensionality(&self.units).to_py()?;
         Ok(self_dim.to_string() == dimension)
     }
 
     fn is_compatible_with(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
         let mut reg = self.registry.lock().unwrap();
-        let self_dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
+        let self_dim = reg.get_dimensionality(&self.units).to_py()?;
         if let Ok(other_q) = other.extract::<PyQuantity>() {
-            let other_dim = reg.get_dimensionality(&other_q.units).map_err(to_py_err)?;
+            let other_dim = reg.get_dimensionality(&other_q.units).to_py()?;
             Ok(self_dim == other_dim)
         } else if let Ok(other_u) = other.extract::<PyUnit>() {
-            let other_dim = reg.get_dimensionality(&other_u.units).map_err(to_py_err)?;
+            let other_dim = reg.get_dimensionality(&other_u.units).to_py()?;
             Ok(self_dim == other_dim)
         } else if let Ok(s) = other.extract::<String>() {
-            let other_uc = reg.parse_unit_expr(&s).map_err(to_py_err)?;
-            let other_dim = reg.get_dimensionality(&other_uc).map_err(to_py_err)?;
+            let other_uc = reg.parse_unit_expr(&s).to_py()?;
+            let other_dim = reg.get_dimensionality(&other_uc).to_py()?;
             Ok(self_dim == other_dim)
         } else {
             Ok(self_dim.is_empty())
@@ -1002,7 +1121,7 @@ impl PyQuantity {
 
     fn compatible_units(&self) -> PyResult<Vec<String>> {
         let mut reg = self.registry.lock().unwrap();
-        let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
+        let dim = reg.get_dimensionality(&self.units).to_py()?;
         Ok(reg.get_units_by_dimensionality(&dim))
     }
 
@@ -1076,7 +1195,7 @@ impl PyQuantity {
 
     fn __float__(&self) -> PyResult<f64> {
         let mut reg = self.registry.lock().unwrap();
-        let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
+        let dim = reg.get_dimensionality(&self.units).to_py()?;
         if !dim.is_empty() {
             return Err(DimensionalityError::new_err(format!(
                 "Cannot convert Quantity with dimensionality {} to float",
@@ -1085,7 +1204,7 @@ impl PyQuantity {
         }
         let factor = reg
             .get_conversion_factor(&self.units, &UnitsContainer::new())
-            .map_err(to_py_err)?;
+            .to_py()?;
         Ok(self.magnitude * factor)
     }
 
@@ -1098,84 +1217,64 @@ impl PyQuantity {
     }
 
     fn __neg__(&self) -> PyQuantity {
-        PyQuantity {
-            magnitude: -self.magnitude,
-            units: self.units.clone(),
-            registry: Arc::clone(&self.registry),
-            cached_dim: OnceCell::new(),
-            cached_registry_obj: OnceCell::new(),
-        }
+        self.rebuild(-self.magnitude, self.units.clone())
     }
 
     fn __abs__(&self) -> PyQuantity {
-        PyQuantity {
-            magnitude: self.magnitude.abs(),
-            units: self.units.clone(),
-            registry: Arc::clone(&self.registry),
-            cached_dim: OnceCell::new(),
-            cached_registry_obj: OnceCell::new(),
-        }
+        self.rebuild(self.magnitude.abs(), self.units.clone())
     }
 
     #[pyo3(signature = (ndigits=None))]
     fn __round__(&self, ndigits: Option<i32>) -> PyQuantity {
         let n = ndigits.unwrap_or(0);
         let factor = 10f64.powi(n);
-        PyQuantity {
-            magnitude: (self.magnitude * factor).round() / factor,
-            units: self.units.clone(),
-            registry: Arc::clone(&self.registry),
-            cached_dim: OnceCell::new(),
-            cached_registry_obj: OnceCell::new(),
-        }
+        self.rebuild(
+            (self.magnitude * factor).round() / factor,
+            self.units.clone(),
+        )
     }
 
     fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
         if let Ok(other_q) = other.extract::<PyQuantity>() {
+            // Offset/log (non-multiplicative) units follow special add rules.
+            {
+                let mut reg = self.registry.lock().unwrap();
+                if reg.is_non_multiplicative(&self.units)
+                    || reg.is_non_multiplicative(&other_q.units)
+                {
+                    let (mag, units) = reg
+                        .offset_log_add_sub(
+                            &self.units,
+                            self.magnitude,
+                            &other_q.units,
+                            other_q.magnitude,
+                            false,
+                        )
+                        .to_py()?;
+                    return Ok(self.rebuild(mag, units));
+                }
+            }
             if self.units == other_q.units {
-                return Ok(PyQuantity {
-                    magnitude: self.magnitude + other_q.magnitude,
-                    units: self.units.clone(),
-                    registry: Arc::clone(&self.registry),
-                    cached_dim: OnceCell::new(),
-                    cached_registry_obj: OnceCell::new(),
-                });
+                return Ok(self.rebuild(self.magnitude + other_q.magnitude, self.units.clone()));
             }
             let mut reg = self.registry.lock().unwrap();
             let factor = reg
                 .get_conversion_factor(&other_q.units, &self.units)
-                .map_err(to_py_err)?;
-            Ok(PyQuantity {
-                magnitude: self.magnitude + other_q.magnitude * factor,
-                units: self.units.clone(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+                .to_py()?;
+            Ok(self.rebuild(
+                self.magnitude + other_q.magnitude * factor,
+                self.units.clone(),
+            ))
         } else if let Ok(val) = other.extract::<f64>() {
             if self.units.is_empty() || val == 0.0 {
-                return Ok(PyQuantity {
-                    magnitude: self.magnitude + val,
-                    units: self.units.clone(),
-                    registry: Arc::clone(&self.registry),
-                    cached_dim: OnceCell::new(),
-                    cached_registry_obj: OnceCell::new(),
-                });
+                return Ok(self.rebuild(self.magnitude + val, self.units.clone()));
             }
-            let mut reg = self.registry.lock().unwrap();
-            let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
-            if !dim.is_empty() {
-                return Err(DimensionalityError::new_err(
-                    "Cannot add dimensionless to quantity with dimensions",
-                ));
-            }
-            Ok(PyQuantity {
-                magnitude: self.magnitude + val,
-                units: self.units.clone(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            // Dimensionless but with non-empty (scaled) units, e.g. `cm*s/m/ms` or
+            // `radian`. Convert the magnitude to plain dimensionless units before
+            // adding the bare number, matching pint (which yields `dimensionless`,
+            // not the intermediate scale or a self-rooting unit like `radian`).
+            let value = self.dimensionless_value()?;
+            Ok(self.rebuild(value + val, UnitsContainer::new()))
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for +"))
         }
@@ -1187,50 +1286,44 @@ impl PyQuantity {
 
     fn __sub__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
         if let Ok(other_q) = other.extract::<PyQuantity>() {
+            // Offset/log (non-multiplicative) units follow special subtract rules
+            // (absolute - absolute yields a delta).
+            {
+                let mut reg = self.registry.lock().unwrap();
+                if reg.is_non_multiplicative(&self.units)
+                    || reg.is_non_multiplicative(&other_q.units)
+                {
+                    let (mag, units) = reg
+                        .offset_log_add_sub(
+                            &self.units,
+                            self.magnitude,
+                            &other_q.units,
+                            other_q.magnitude,
+                            true,
+                        )
+                        .to_py()?;
+                    return Ok(self.rebuild(mag, units));
+                }
+            }
             if self.units == other_q.units {
-                return Ok(PyQuantity {
-                    magnitude: self.magnitude - other_q.magnitude,
-                    units: self.units.clone(),
-                    registry: Arc::clone(&self.registry),
-                    cached_dim: OnceCell::new(),
-                    cached_registry_obj: OnceCell::new(),
-                });
+                return Ok(self.rebuild(self.magnitude - other_q.magnitude, self.units.clone()));
             }
             let mut reg = self.registry.lock().unwrap();
             let factor = reg
                 .get_conversion_factor(&other_q.units, &self.units)
-                .map_err(to_py_err)?;
-            Ok(PyQuantity {
-                magnitude: self.magnitude - other_q.magnitude * factor,
-                units: self.units.clone(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+                .to_py()?;
+            Ok(self.rebuild(
+                self.magnitude - other_q.magnitude * factor,
+                self.units.clone(),
+            ))
         } else if let Ok(val) = other.extract::<f64>() {
             if self.units.is_empty() || val == 0.0 {
-                return Ok(PyQuantity {
-                    magnitude: self.magnitude - val,
-                    units: self.units.clone(),
-                    registry: Arc::clone(&self.registry),
-                    cached_dim: OnceCell::new(),
-                    cached_registry_obj: OnceCell::new(),
-                });
+                return Ok(self.rebuild(self.magnitude - val, self.units.clone()));
             }
-            let mut reg = self.registry.lock().unwrap();
-            let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
-            if !dim.is_empty() {
-                return Err(DimensionalityError::new_err(
-                    "Cannot subtract dimensionless from quantity with dimensions",
-                ));
-            }
-            Ok(PyQuantity {
-                magnitude: self.magnitude - val,
-                units: self.units.clone(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            // Dimensionless but with non-empty (scaled) units: convert to plain
+            // dimensionless units before subtracting the bare number (pint parity).
+            let value = self.dimensionless_value()?;
+            Ok(self.rebuild(value - val, UnitsContainer::new()))
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for -"))
         }
@@ -1248,45 +1341,30 @@ impl PyQuantity {
     }
 
     fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
+        // Multiplying a non-multiplicative (offset/log) unit is ambiguous; pint
+        // raises OffsetUnitCalculusError. Checked before the numeric fast path so
+        // `degC * 2` and `2 * degC` (via __rmul__) both raise.
+        self.ensure_multiplicative(&self.units)?;
         // Check if it's a native Python float/int first (most common case).
         // Use is_instance_of to avoid triggering __float__ on Quantity objects.
         if other.is_instance_of::<pyo3::types::PyFloat>()
             || other.is_instance_of::<pyo3::types::PyInt>()
         {
             let val: f64 = other.extract()?;
-            return Ok(PyQuantity {
-                magnitude: self.magnitude * val,
-                units: self.units.clone(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            });
+            return Ok(self.rebuild(self.magnitude * val, self.units.clone()));
         }
         if let Ok(other_q) = other.extract::<PyQuantity>() {
-            Ok(PyQuantity {
-                magnitude: self.magnitude * other_q.magnitude,
-                units: &self.units * &other_q.units,
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            other_q.ensure_multiplicative(&other_q.units)?;
+            Ok(self.rebuild(
+                self.magnitude * other_q.magnitude,
+                &self.units * &other_q.units,
+            ))
         } else if let Ok(other_u) = other.extract::<PyUnit>() {
-            Ok(PyQuantity {
-                magnitude: self.magnitude,
-                units: &self.units * &other_u.units,
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            self.ensure_multiplicative(&other_u.units)?;
+            Ok(self.rebuild(self.magnitude, &self.units * &other_u.units))
         } else if let Ok(val) = other.extract::<f64>() {
             // Fallback for other numeric types (numpy scalars, etc.)
-            Ok(PyQuantity {
-                magnitude: self.magnitude * val,
-                units: self.units.clone(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            Ok(self.rebuild(self.magnitude * val, self.units.clone()))
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for *"))
         }
@@ -1297,6 +1375,9 @@ impl PyQuantity {
     }
 
     fn __truediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
+        // Dividing a non-multiplicative (offset/log) unit is ambiguous; pint
+        // raises OffsetUnitCalculusError (e.g. `degC / 2`, `2 / degC`).
+        self.ensure_multiplicative(&self.units)?;
         if other.is_instance_of::<pyo3::types::PyFloat>()
             || other.is_instance_of::<pyo3::types::PyInt>()
         {
@@ -1304,61 +1385,37 @@ impl PyQuantity {
             if val == 0.0 {
                 return Err(PyZeroDivisionError::new_err("Division by zero"));
             }
-            return Ok(PyQuantity {
-                magnitude: self.magnitude / val,
-                units: self.units.clone(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            });
+            return Ok(self.rebuild(self.magnitude / val, self.units.clone()));
         }
         if let Ok(other_q) = other.extract::<PyQuantity>() {
+            other_q.ensure_multiplicative(&other_q.units)?;
             if other_q.magnitude == 0.0 {
                 return Err(PyZeroDivisionError::new_err("Division by zero"));
             }
-            Ok(PyQuantity {
-                magnitude: self.magnitude / other_q.magnitude,
-                units: &self.units / &other_q.units,
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            Ok(self.rebuild(
+                self.magnitude / other_q.magnitude,
+                &self.units / &other_q.units,
+            ))
         } else if let Ok(other_u) = other.extract::<PyUnit>() {
-            Ok(PyQuantity {
-                magnitude: self.magnitude,
-                units: &self.units / &other_u.units,
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            self.ensure_multiplicative(&other_u.units)?;
+            Ok(self.rebuild(self.magnitude, &self.units / &other_u.units))
         } else if let Ok(val) = other.extract::<f64>() {
             if val == 0.0 {
                 return Err(PyZeroDivisionError::new_err("Division by zero"));
             }
-            Ok(PyQuantity {
-                magnitude: self.magnitude / val,
-                units: self.units.clone(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            Ok(self.rebuild(self.magnitude / val, self.units.clone()))
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for /"))
         }
     }
 
     fn __rtruediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
+        self.ensure_multiplicative(&self.units)?;
         if self.magnitude == 0.0 {
             return Err(PyZeroDivisionError::new_err("Division by zero"));
         }
         if let Ok(val) = other.extract::<f64>() {
-            Ok(PyQuantity {
-                magnitude: val / self.magnitude,
-                units: self.units.inv(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            Ok(self.rebuild(val / self.magnitude, self.units.inv()))
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for /"))
         }
@@ -1369,41 +1426,40 @@ impl PyQuantity {
             if other_q.magnitude == 0.0 {
                 return Err(PyZeroDivisionError::new_err("Division by zero"));
             }
-            Ok(PyQuantity {
-                magnitude: (self.magnitude / other_q.magnitude).floor(),
-                units: &self.units / &other_q.units,
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            // Floor division of two quantities requires compatible dimensions
+            // (the conversion fails otherwise) and yields a plain dimensionless
+            // number computed from the converted values, matching pint.
+            let mut reg = self.registry.lock().unwrap();
+            let factor = reg
+                .get_conversion_factor(&other_q.units, &self.units)
+                .to_py()?;
+            Ok(self.rebuild(
+                floored_div(self.magnitude, other_q.magnitude * factor),
+                UnitsContainer::new(),
+            ))
         } else if let Ok(val) = other.extract::<f64>() {
+            // Floor-dividing by a bare number requires a dimensionless quantity
+            // and yields a plain number; operate in base units (pint parity).
+            // The dimensionality check precedes the zero check, like pint.
+            let value = self.dimensionless_value()?;
             if val == 0.0 {
                 return Err(PyZeroDivisionError::new_err("Division by zero"));
             }
-            Ok(PyQuantity {
-                magnitude: (self.magnitude / val).floor(),
-                units: self.units.clone(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            Ok(self.rebuild(floored_div(value, val), UnitsContainer::new()))
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for //"))
         }
     }
 
     fn __rfloordiv__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
-        if self.magnitude == 0.0 {
-            return Err(PyZeroDivisionError::new_err("Division by zero"));
-        }
         if let Ok(val) = other.extract::<f64>() {
-            Ok(PyQuantity {
-                magnitude: (val / self.magnitude).floor(),
-                units: self.units.inv(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            // number // quantity: requires a dimensionless quantity; operate in
+            // base units and return a plain number (pint parity).
+            let base = self.dimensionless_value()?;
+            if base == 0.0 {
+                return Err(PyZeroDivisionError::new_err("Division by zero"));
+            }
+            Ok(self.rebuild(floored_div(val, base), UnitsContainer::new()))
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for //"))
         }
@@ -1415,66 +1471,73 @@ impl PyQuantity {
                 return Err(PyZeroDivisionError::new_err("Modulo by zero"));
             }
             if self.units == other_q.units {
-                return Ok(PyQuantity {
-                    magnitude: self.magnitude % other_q.magnitude,
-                    units: self.units.clone(),
-                    registry: Arc::clone(&self.registry),
-                    cached_dim: OnceCell::new(),
-                    cached_registry_obj: OnceCell::new(),
-                });
+                return Ok(self.rebuild(
+                    floored_mod(self.magnitude, other_q.magnitude),
+                    self.units.clone(),
+                ));
             }
             let mut reg = self.registry.lock().unwrap();
             let factor = reg
                 .get_conversion_factor(&other_q.units, &self.units)
-                .map_err(to_py_err)?;
-            Ok(PyQuantity {
-                magnitude: self.magnitude % (other_q.magnitude * factor),
-                units: self.units.clone(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+                .to_py()?;
+            Ok(self.rebuild(
+                floored_mod(self.magnitude, other_q.magnitude * factor),
+                self.units.clone(),
+            ))
         } else if let Ok(val) = other.extract::<f64>() {
+            // Modulo by a bare number requires a dimensionless quantity. pint keeps
+            // the dividend's units but operates on the base-unit value; compute the
+            // remainder in base units, then express it back in `self.units`. The
+            // dimensionality check precedes the zero check, like pint.
+            let factor = self.require_dimensionless_factor()?;
             if val == 0.0 {
                 return Err(PyZeroDivisionError::new_err("Modulo by zero"));
             }
-            Ok(PyQuantity {
-                magnitude: self.magnitude % val,
-                units: self.units.clone(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            let base_remainder = floored_mod(self.magnitude * factor, val);
+            Ok(self.rebuild(base_remainder / factor, self.units.clone()))
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for %"))
         }
     }
 
     fn __rmod__(&self, other: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
-        if self.magnitude == 0.0 {
-            return Err(PyZeroDivisionError::new_err("Modulo by zero"));
-        }
         if let Ok(val) = other.extract::<f64>() {
-            Ok(PyQuantity {
-                magnitude: val % self.magnitude,
-                units: self.units.clone(),
-                registry: Arc::clone(&self.registry),
-                cached_dim: OnceCell::new(),
-                cached_registry_obj: OnceCell::new(),
-            })
+            // number % quantity: requires a dimensionless quantity; operate in base
+            // units and return a plain number (pint parity).
+            let base = self.dimensionless_value()?;
+            if base == 0.0 {
+                return Err(PyZeroDivisionError::new_err("Modulo by zero"));
+            }
+            Ok(self.rebuild(floored_mod(val, base), UnitsContainer::new()))
         } else {
             Err(PyTypeError::new_err("Unsupported operand type for %"))
         }
     }
 
+    fn __divmod__(&self, other: &Bound<'_, PyAny>) -> PyResult<(PyQuantity, PyQuantity)> {
+        // `divmod(q, x) == (q // x, q % x)`, reusing the consistent floor/mod logic.
+        Ok((self.__floordiv__(other)?, self.__mod__(other)?))
+    }
+
+    fn __rdivmod__(&self, other: &Bound<'_, PyAny>) -> PyResult<(PyQuantity, PyQuantity)> {
+        Ok((self.__rfloordiv__(other)?, self.__rmod__(other)?))
+    }
+
     fn __pow__(&self, exp: f64, _modulo: Option<u32>) -> PyResult<PyQuantity> {
-        Ok(PyQuantity {
-            magnitude: self.magnitude.powf(exp),
-            units: self.units.pow(exp),
-            registry: Arc::clone(&self.registry),
-            cached_dim: OnceCell::new(),
-            cached_registry_obj: OnceCell::new(),
-        })
+        // Raising a non-multiplicative (offset/log) unit to a power other than
+        // 0 or 1 is ambiguous; pint raises OffsetUnitCalculusError. `**0` yields
+        // a dimensionless 1 and `**1` is the identity, both of which are allowed.
+        if exp != 0.0 && exp != 1.0 {
+            self.ensure_multiplicative(&self.units)?;
+        }
+        Ok(self.rebuild(self.magnitude.powf(exp), self.units.pow(exp)))
+    }
+
+    fn __rpow__(&self, base: f64, _modulo: Option<u32>) -> PyResult<f64> {
+        // `number ** quantity` requires a dimensionless exponent (taken at its
+        // base value) and yields a plain number, matching pint.
+        let value = self.dimensionless_value()?;
+        Ok(base.powf(value))
     }
 
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
@@ -1484,8 +1547,9 @@ impl PyQuantity {
                     < f64::EPSILON * self.magnitude.abs().max(1.0));
             }
             let mut reg = self.registry.lock().unwrap();
-            match reg.get_conversion_factor(&other_q.units, &self.units) {
-                Ok(factor) => Ok((self.magnitude - other_q.magnitude * factor).abs()
+            // Use the offset/log-aware conversion so e.g. `0 dBW == 1 W`.
+            match reg.convert(other_q.magnitude, &other_q.units, &self.units) {
+                Ok(converted) => Ok((self.magnitude - converted).abs()
                     < f64::EPSILON * self.magnitude.abs().max(1.0)),
                 Err(_) => Ok(false),
             }
@@ -1494,12 +1558,13 @@ impl PyQuantity {
                 return Ok((self.magnitude - val).abs() < f64::EPSILON * val.abs().max(1.0));
             }
             let mut reg = self.registry.lock().unwrap();
-            let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
+            let dim = reg.get_dimensionality(&self.units).to_py()?;
             if dim.is_empty() {
-                let factor = reg
-                    .get_conversion_factor(&self.units, &UnitsContainer::new())
-                    .map_err(to_py_err)?;
-                Ok((self.magnitude * factor - val).abs() < f64::EPSILON * val.abs().max(1.0))
+                // Offset/log-aware so e.g. `1 dB == 10**0.1`, matching pint.
+                let converted = reg
+                    .convert(self.magnitude, &self.units, &UnitsContainer::new())
+                    .to_py()?;
+                Ok((converted - val).abs() < f64::EPSILON * val.abs().max(1.0))
             } else {
                 Ok(false)
             }
@@ -1513,77 +1578,25 @@ impl PyQuantity {
     }
 
     fn __lt__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
-        if let Ok(other_q) = other.extract::<PyQuantity>() {
-            if self.units == other_q.units {
-                return Ok(self.magnitude < other_q.magnitude);
-            }
-            let mut reg = self.registry.lock().unwrap();
-            let factor = reg
-                .get_conversion_factor(&other_q.units, &self.units)
-                .map_err(to_py_err)?;
-            Ok(self.magnitude < other_q.magnitude * factor)
-        } else {
-            Err(PyTypeError::new_err(
-                "Cannot compare Quantity with non-Quantity",
-            ))
-        }
+        self.compare_ordered(other, |a, b| a < b)
     }
 
     fn __le__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
-        if let Ok(other_q) = other.extract::<PyQuantity>() {
-            if self.units == other_q.units {
-                return Ok(self.magnitude <= other_q.magnitude);
-            }
-            let mut reg = self.registry.lock().unwrap();
-            let factor = reg
-                .get_conversion_factor(&other_q.units, &self.units)
-                .map_err(to_py_err)?;
-            Ok(self.magnitude <= other_q.magnitude * factor)
-        } else {
-            Err(PyTypeError::new_err(
-                "Cannot compare Quantity with non-Quantity",
-            ))
-        }
+        self.compare_ordered(other, |a, b| a <= b)
     }
 
     fn __gt__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
-        if let Ok(other_q) = other.extract::<PyQuantity>() {
-            if self.units == other_q.units {
-                return Ok(self.magnitude > other_q.magnitude);
-            }
-            let mut reg = self.registry.lock().unwrap();
-            let factor = reg
-                .get_conversion_factor(&other_q.units, &self.units)
-                .map_err(to_py_err)?;
-            Ok(self.magnitude > other_q.magnitude * factor)
-        } else {
-            Err(PyTypeError::new_err(
-                "Cannot compare Quantity with non-Quantity",
-            ))
-        }
+        self.compare_ordered(other, |a, b| a > b)
     }
 
     fn __ge__(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
-        if let Ok(other_q) = other.extract::<PyQuantity>() {
-            if self.units == other_q.units {
-                return Ok(self.magnitude >= other_q.magnitude);
-            }
-            let mut reg = self.registry.lock().unwrap();
-            let factor = reg
-                .get_conversion_factor(&other_q.units, &self.units)
-                .map_err(to_py_err)?;
-            Ok(self.magnitude >= other_q.magnitude * factor)
-        } else {
-            Err(PyTypeError::new_err(
-                "Cannot compare Quantity with non-Quantity",
-            ))
-        }
+        self.compare_ordered(other, |a, b| a >= b)
     }
 
     fn __hash__(&self) -> PyResult<isize> {
         let base = self.to_base_units()?;
         let mut reg = self.registry.lock().unwrap();
-        let dim = reg.get_dimensionality(&base.units).map_err(to_py_err)?;
+        let dim = reg.get_dimensionality(&base.units).to_py()?;
         if dim.is_empty() {
             Ok(base.magnitude.to_bits() as isize)
         } else {
@@ -1636,12 +1649,22 @@ impl Clone for PyUnit {
     }
 }
 
+impl PyUnit {
+    /// Raise `OffsetUnitCalculusError` if these units are non-multiplicative.
+    /// Used when a `Unit` is scaled by a number (`degC * 2`), which produces a
+    /// `Quantity` and is forbidden by pint for offset/log units.
+    fn ensure_multiplicative(&self) -> PyResult<()> {
+        let reg = self.registry.lock().unwrap();
+        ensure_units_multiplicative(&reg, &self.units)
+    }
+}
+
 #[pymethods]
 impl PyUnit {
     #[new]
     fn new(units: &str) -> PyResult<Self> {
-        let mut reg = RustRegistry::new().map_err(to_py_err)?;
-        let uc = reg.parse_unit_expr(units).map_err(to_py_err)?;
+        let mut reg = RustRegistry::new().to_py()?;
+        let uc = reg.parse_unit_expr(units).to_py()?;
         let shared = Arc::new(Mutex::new(reg));
         Ok(Self {
             units: uc,
@@ -1652,41 +1675,32 @@ impl PyUnit {
 
     #[getter]
     fn _registry(&self, py: Python<'_>) -> PyResult<PyObject> {
-        if let Some(cached) = self.cached_registry_obj.get() {
-            return Ok(cached.clone_ref(py));
-        }
-        let reg = PyUnitRegistry {
-            inner: Arc::clone(&self.registry),
-            _init_kwargs: None,
-        };
-        let obj = reg.into_pyobject(py)?.into_any().unbind();
-        let _ = self.cached_registry_obj.set(obj.clone_ref(py));
-        Ok(obj)
+        registry_pyobject(py, &self.registry, &self.cached_registry_obj)
     }
 
     #[getter]
     fn dimensionality(&self) -> PyResult<String> {
         let mut reg = self.registry.lock().unwrap();
-        let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
+        let dim = reg.get_dimensionality(&self.units).to_py()?;
         Ok(dim.to_string())
     }
 
     #[getter]
     fn dimensionless(&self) -> PyResult<bool> {
         let mut reg = self.registry.lock().unwrap();
-        let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
+        let dim = reg.get_dimensionality(&self.units).to_py()?;
         Ok(dim.is_empty())
     }
 
     fn is_compatible_with(&self, other: &Bound<'_, PyAny>) -> PyResult<bool> {
         let mut reg = self.registry.lock().unwrap();
-        let self_dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
+        let self_dim = reg.get_dimensionality(&self.units).to_py()?;
         if let Ok(other_u) = other.extract::<PyUnit>() {
-            let other_dim = reg.get_dimensionality(&other_u.units).map_err(to_py_err)?;
+            let other_dim = reg.get_dimensionality(&other_u.units).to_py()?;
             Ok(self_dim == other_dim)
         } else if let Ok(s) = other.extract::<String>() {
-            let other_uc = reg.parse_unit_expr(&s).map_err(to_py_err)?;
-            let other_dim = reg.get_dimensionality(&other_uc).map_err(to_py_err)?;
+            let other_uc = reg.parse_unit_expr(&s).to_py()?;
+            let other_dim = reg.get_dimensionality(&other_uc).to_py()?;
             Ok(self_dim == other_dim)
         } else {
             Ok(false)
@@ -1695,7 +1709,7 @@ impl PyUnit {
 
     fn compatible_units(&self) -> PyResult<Vec<String>> {
         let mut reg = self.registry.lock().unwrap();
-        let dim = reg.get_dimensionality(&self.units).map_err(to_py_err)?;
+        let dim = reg.get_dimensionality(&self.units).to_py()?;
         Ok(reg.get_units_by_dimensionality(&dim))
     }
 
@@ -1746,6 +1760,7 @@ impl PyUnit {
             .into_any()
             .unbind())
         } else if let Ok(val) = other.extract::<f64>() {
+            self.ensure_multiplicative()?;
             Ok(PyQuantity {
                 magnitude: val,
                 units: self.units.clone(),
@@ -1757,6 +1772,7 @@ impl PyUnit {
             .into_any()
             .unbind())
         } else if let Ok(val) = other.extract::<i64>() {
+            self.ensure_multiplicative()?;
             Ok(PyQuantity {
                 magnitude: val as f64,
                 units: self.units.clone(),
@@ -1824,24 +1840,19 @@ impl PyUnit {
     fn from_(&self, value: &Bound<'_, PyAny>) -> PyResult<PyQuantity> {
         let q: PyQuantity = value.extract()?;
         let mut reg = self.registry.lock().unwrap();
-        let new_mag = reg
-            .convert(q.magnitude, &q.units, &self.units)
-            .map_err(to_py_err)?;
-        Ok(PyQuantity {
-            magnitude: new_mag,
-            units: self.units.clone(),
-            registry: Arc::clone(&self.registry),
-            cached_dim: OnceCell::new(),
-            cached_registry_obj: OnceCell::new(),
-        })
+        let new_mag = reg.convert(q.magnitude, &q.units, &self.units).to_py()?;
+        Ok(PyQuantity::from_parts(
+            new_mag,
+            self.units.clone(),
+            Arc::clone(&self.registry),
+        ))
     }
 
     /// Get magnitude of a Quantity in this Unit.
     fn m_from(&self, value: &Bound<'_, PyAny>) -> PyResult<f64> {
         let q: PyQuantity = value.extract()?;
         let mut reg = self.registry.lock().unwrap();
-        reg.convert(q.magnitude, &q.units, &self.units)
-            .map_err(to_py_err)
+        reg.convert(q.magnitude, &q.units, &self.units).to_py()
     }
 
     /// Return set of system names this unit belongs to (stub: returns empty set).

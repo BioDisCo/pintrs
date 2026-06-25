@@ -8,7 +8,8 @@ __array_ufunc__ for transparent numpy integration.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Literal, TypeVar, cast
+import operator
+from typing import TYPE_CHECKING, Any, Callable, Literal, TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -28,6 +29,7 @@ except ImportError:
     has_numpy = False
 
 if has_numpy:
+    from pintrs._core import DimensionalityError, OffsetUnitCalculusError
     from pintrs._core import Quantity as ScalarQuantity
     from pintrs._core import Unit as _Unit
     from pintrs._core import UnitRegistry as _UnitRegistry
@@ -102,6 +104,16 @@ if has_numpy:
                         return r
         return None
 
+    def _first_unit_of(items: Any) -> str | None:
+        """First non-None unit string among `items`, else None.
+
+        The output unit for sequence ops (concatenate/stack/...) is the unit of
+        the first dimensioned operand.
+        """
+        return next(
+            (u for u in (_unit_str_of(a) for a in items) if u is not None), None
+        )
+
     def _unit_obj_of(x: Any) -> Any:
         if isinstance(x, ScalarQuantity):
             return x.units
@@ -120,7 +132,76 @@ if has_numpy:
         if src_unit is None or src_unit == dst_unit or registry is None:
             return mag
         factor = registry._get_conversion_factor(src_unit, dst_unit)
+        if isinstance(mag, (list, tuple)):
+            mag = np.asarray(mag, dtype=float)
         return mag * factor
+
+    def _bare_src(
+        operand_unit: str | None, ref_unit: str | None, registry: Any
+    ) -> str | None:
+        """Source unit for an operand combined with a reference quantity.
+
+        A bare (unitless) operand is interpreted as a *dimensionless value* when
+        the reference quantity is dimensionless, so it is converted to base units
+        like pint (issue #5). For a dimensional reference the operand keeps the
+        reference's own unit (existing pintrs convenience).
+        """
+        if operand_unit is not None:
+            return operand_unit
+        if (
+            ref_unit is not None
+            and registry is not None
+            and bool(registry.Unit(ref_unit).dimensionless)
+        ):
+            return "dimensionless"
+        return ref_unit
+
+    def _align_operand(
+        mag: Any, operand_unit: str | None, ref_unit: str | None, registry: Any
+    ) -> Any:
+        """Convert an operand's magnitude into ``ref_unit`` for an additive,
+        comparison or selection operation, matching pint.
+
+        - A unit-bearing operand is converted (raising on incompatible dims).
+        - A bare operand is a dimensionless value: converted to base units when
+          the reference is dimensionless. Against a *dimensional* reference only
+          zero is allowed (pint permits adding/selecting zero); any other bare
+          value raises ``DimensionalityError``.
+        """
+        if operand_unit is not None:
+            dst = ref_unit or ""
+            if (
+                registry is not None
+                and dst
+                and (
+                    registry._is_non_multiplicative(operand_unit)
+                    or registry._is_non_multiplicative(dst)
+                )
+            ):
+                # Offset/log units must convert through their full transform (so
+                # 32 degF -> 0 degC, not 17.78), matching pint for the array
+                # combination/selection handlers (concatenate, stack, where, ...).
+                arr = np.asarray(mag, dtype=float)
+                out = np.array(
+                    [
+                        registry.Quantity(float(x), operand_unit).to(dst).magnitude
+                        for x in arr.ravel()
+                    ]
+                ).reshape(arr.shape)
+                return out if arr.ndim else out.item()
+            return _convert_mag(mag, operand_unit, dst, registry)
+        if ref_unit is None or registry is None:
+            return mag
+        if bool(registry.Unit(ref_unit).dimensionless):
+            return _convert_mag(mag, "dimensionless", ref_unit, registry)
+        if bool(np.all(np.asarray(mag) == 0)):
+            return mag
+
+        msg = (
+            "Cannot combine a bare number with a quantity that has dimensions "
+            f"({ref_unit})"
+        )
+        raise DimensionalityError(msg)
 
     def _make_result(mag: Any, unit_str: str, registry: Any) -> Any:
         if isinstance(mag, np.ndarray):
@@ -267,42 +348,96 @@ if has_numpy:
                 return units
             return str(getattr(units, "units", units))
 
+        def _convert_magnitude(self, target: str) -> NDArray[Any]:
+            # Ordinary units convert by a single factor; offset/logarithmic units
+            # (degC, dB, ...) need the offset/log transform applied element-wise,
+            # matching scalar Quantity.to().
+            reg = self._registry
+            src = self._units_str
+            if reg._is_non_multiplicative(src) or reg._is_non_multiplicative(target):
+                mag = np.asarray(self._magnitude)
+                if np.iscomplexobj(mag):
+                    return self._convert_complex(mag, src, target)
+                return np.array(
+                    [
+                        reg.Quantity(float(x), src).to(target).magnitude
+                        for x in mag.ravel()
+                    ]
+                ).reshape(mag.shape)
+            return self._magnitude * reg._get_conversion_factor(src, target)
+
+        def _convert_complex(
+            self, mag: NDArray[Any], src: str, target: str
+        ) -> NDArray[Any]:
+            """Apply an offset/log conversion to a complex magnitude.
+
+            The scalar ``Quantity.to`` path is real-only, so reconstruct the
+            conversion's closed form from real samples and apply it to the
+            complex array. The form is chosen from unit metadata, not from the
+            sampled curvature, so it never misclassifies:
+
+            - neither side logarithmic -> affine ``f(x) = a + b*x`` (offset and
+              ordinary units, including ``degC`` -> ``degF`` and ``dBW`` ->
+              ``dBm`` which are both affine);
+            - source logarithmic, target not -> exponential ``f(x) = c*r**x``
+              (e.g. ``dBW`` -> ``W``);
+            - target logarithmic, source not -> logarithmic ``f(x) = p + q*ln(x)``
+              (e.g. ``W`` -> ``dBW``).
+
+            This matches pint's element-wise complex behaviour for every
+            built-in unit. The exponential form reconstructs its ratio from real
+            samples, so a contrived log unit with an extreme ``logfactor`` (no
+            real unit has one) can differ from pint in the last few digits.
+            """
+            reg = self._registry
+
+            def sample(x: float) -> float:
+                return float(reg.Quantity(x, src).to(target).magnitude)
+
+            src_log = reg._is_log_unit(src)
+            target_log = reg._is_log_unit(target)
+            if src_log == target_log:
+                # Affine: f(x) = f(0) + (f(1) - f(0)) * x.
+                c0 = sample(0.0)
+                return (sample(1.0) - c0) * mag + c0
+            if src_log:
+                # Exponential: f(x) = f(0) * (f(1) / f(0)) ** x.
+                c0 = sample(0.0)
+                return c0 * (sample(1.0) / c0) ** mag
+            # Logarithmic: f(x) = f(1) + (f(e) - f(1)) * ln(x).
+            f1 = sample(1.0)
+            log_mag: NDArray[Any] = np.log(mag)
+            return f1 + (sample(float(np.e)) - f1) * log_mag
+
+        def _ensure_multiplicative(self, *operands: str | None) -> None:
+            """Raise OffsetUnitCalculusError if self or any operand has a
+            non-multiplicative (offset/log) unit. Multiplying, dividing, or
+            powering such units is ambiguous; pint and the scalar Quantity
+            enforce the same rule. ``None`` operands (bare numbers) are skipped.
+            """
+            reg = self._registry
+            for unit in (self._units_str, *operands):
+                if unit is not None and reg._is_non_multiplicative(unit):
+                    msg = "Ambiguous operation with offset unit."
+                    raise OffsetUnitCalculusError(msg)
+
         def m_as(self, units: Any) -> NDArray[Any]:
-            u = self._coerce_units(units)
-            factor = self._registry._get_conversion_factor(
-                self._units_str,
-                u,
-            )
-            return self._magnitude * factor
+            return self._convert_magnitude(self._coerce_units(units))
 
         def to(self, units: Any, *contexts: Any) -> ArrayQuantity:
             u = self._coerce_units(units)
-            factor = self._registry._get_conversion_factor(
-                self._units_str,
-                u,
-            )
-            return ArrayQuantity(
-                self._magnitude * factor,
-                u,
-                self._registry,
-            )
+            return ArrayQuantity(self._convert_magnitude(u), u, self._registry)
 
         def ito(self, units: Any) -> None:
             u = self._coerce_units(units)
-            factor = self._registry._get_conversion_factor(
-                self._units_str,
-                u,
-            )
-            self._magnitude = self._magnitude * factor
+            self._magnitude = self._convert_magnitude(u)
             self._units_str = u
             self._unit_obj = self._registry.Unit(u)
 
         def to_base_units(self) -> ArrayQuantity:
-            factor, unit_str = self._registry._get_root_units(
-                self._units_str,
-            )
+            _factor, unit_str = self._registry._get_root_units(self._units_str)
             return ArrayQuantity(
-                self._magnitude * factor,
+                self._convert_magnitude(unit_str),
                 unit_str,
                 self._registry,
             )
@@ -341,8 +476,23 @@ if has_numpy:
             min: float | None = None,  # noqa: A002
             max: float | None = None,  # noqa: A002
         ) -> ArrayQuantity:
+            # clip mirrors np.clip: strict on a dimensional array with bare bounds.
+            min_c: Any = (
+                _align_operand(
+                    _mag_of(min), _unit_str_of(min), self._units_str, self._registry
+                )
+                if min is not None
+                else None
+            )
+            max_c: Any = (
+                _align_operand(
+                    _mag_of(max), _unit_str_of(max), self._units_str, self._registry
+                )
+                if max is not None
+                else None
+            )
             return ArrayQuantity(
-                self._magnitude.clip(cast("float", min), cast("float", max)),
+                self._magnitude.clip(min_c, max_c),
                 self._units_str,
                 self._registry,
             )
@@ -406,43 +556,43 @@ if has_numpy:
             self,
             value: float | ScalarQuantity | ArrayQuantity,
         ) -> None:
-            if isinstance(value, (ScalarQuantity, ArrayQuantity)):
-                self._magnitude.fill(value.magnitude)
-            else:
-                self._magnitude.fill(value)
+            self._magnitude.fill(self._operand_in_self_units(value))
+
+        def _operand_in_self_units(self, other: Any) -> Any:
+            # Express a quantity/bare operand in this array's stored units. A bare
+            # value is treated as dimensionless (base) when the array is
+            # dimensionless (issue #5), else as the array's own unit (a pintrs
+            # convenience kept for assignment/query methods).
+            mag, units = self._get_other_mag_and_units(other)
+            src = _bare_src(units, self._units_str, self._registry)
+            return _convert_mag(mag, src, self._units_str, self._registry)
 
         def put(
             self,
             indices: NDArray[np.intp],
             values: float | ScalarQuantity | ArrayQuantity,
         ) -> None:
-            if isinstance(values, (ScalarQuantity, ArrayQuantity)):
-                self._magnitude.put(indices, values.magnitude)
-            else:
-                self._magnitude.put(indices, values)
+            self._magnitude.put(indices, self._operand_in_self_units(values))
 
         def searchsorted(
             self,
             v: float | ScalarQuantity | ArrayQuantity,
             side: Literal["left", "right"] = "left",
         ) -> Any:
-            mag = v.magnitude if isinstance(v, (ScalarQuantity, ArrayQuantity)) else v
+            mag = self._operand_in_self_units(v)
             return self._magnitude.searchsorted(mag, side=side)  # pyright: ignore[reportCallIssue]
 
         def dot(
             self,
             other: ArrayQuantity | NDArray[Any],
         ) -> Any:
-            mag = other._magnitude if isinstance(other, ArrayQuantity) else other
-            return self._magnitude.dot(mag)
+            mag, units = self._get_other_mag_and_units(other)  # type: ignore[arg-type]
+            new_units = self._combine_units(units, operator.mul)
+            return _make_result(self._magnitude.dot(mag), new_units, self._registry)
 
         def copy(self) -> ArrayQuantity:
             """Return a copy of this quantity."""
-            return ArrayQuantity(
-                self._magnitude.copy(),
-                self._units_str,
-                self._registry,
-            )
+            return self._wrap(self._magnitude.copy())
 
         def __len__(self) -> int:
             return len(self._magnitude)
@@ -453,11 +603,7 @@ if has_numpy:
         ) -> ArrayQuantity | ScalarQuantity:
             result = self._magnitude[key]
             if isinstance(result, np.ndarray):
-                return ArrayQuantity(
-                    result,
-                    self._units_str,
-                    self._registry,
-                )
+                return self._wrap(result)
             return self._registry.Quantity(float(result), self._units_str)
 
         def __setitem__(
@@ -465,20 +611,12 @@ if has_numpy:
             key: int | slice | NDArray[np.intp],
             value: float | ScalarQuantity | ArrayQuantity,
         ) -> None:
-            if hasattr(value, "magnitude"):
-                converted = value.to(self._units_str)  # type: ignore[union-attr]
-                self._magnitude[key] = converted.magnitude
-            else:
-                self._magnitude[key] = value
+            self._magnitude[key] = self._operand_in_self_units(value)
 
         def __iter__(self) -> Iterator[ArrayQuantity | ScalarQuantity]:
             for val in self._magnitude:
                 if isinstance(val, np.ndarray):
-                    yield ArrayQuantity(
-                        val,
-                        self._units_str,
-                        self._registry,
-                    )
+                    yield self._wrap(val)
                 else:
                     yield self._registry.Quantity(
                         float(val),
@@ -492,18 +630,42 @@ if has_numpy:
             return f"{self._magnitude} {self._units_str}"
 
         def __neg__(self) -> ArrayQuantity:
-            return ArrayQuantity(
-                -self._magnitude,
-                self._units_str,
-                self._registry,
-            )
+            return self._wrap(-self._magnitude)
 
         def __abs__(self) -> ArrayQuantity:
+            return self._wrap(np.abs(self._magnitude))
+
+        def conjugate(self) -> ArrayQuantity:
+            return self._wrap(np.conjugate(self._magnitude))
+
+        conj = conjugate
+
+        def _wrap(self, mag: Any, units: str | None = None) -> ArrayQuantity:
+            """Build an ArrayQuantity in self's registry, defaulting to its units."""
             return ArrayQuantity(
-                np.abs(self._magnitude),
-                self._units_str,
-                self._registry,
+                mag, self._units_str if units is None else units, self._registry
             )
+
+        def _combine_units(
+            self,
+            units: str | None,
+            op: Callable[[Any, Any], Any],
+            *,
+            reverse: bool = False,
+            bare: str | None = None,
+        ) -> str:
+            """Combine self's unit with operand `units` via `op` (e.g.
+            ``operator.mul``). A bare operand (``units is None``) yields `bare`
+            (default self's units); `reverse` puts the operand on the left, for
+            reflected operators.
+            """
+            if units is None:
+                return self._units_str if bare is None else bare
+            other = self._registry.Unit(units)
+            left, right = (
+                (other, self._unit_obj) if reverse else (self._unit_obj, other)
+            )
+            return str(op(left, right))
 
         def _get_other_mag_and_units(
             self,
@@ -513,23 +675,72 @@ if has_numpy:
                 return other._magnitude, other._units_str
             if isinstance(other, ScalarQuantity):
                 return other.magnitude, str(other.units)
+            if _RustArrayQuantity is not None and isinstance(other, _RustArrayQuantity):
+                return np.asarray(other.m), other._units_str
             if isinstance(other, _Unit):
                 return 1.0, str(other)
             return other, None
+
+        def _dimensionless_factor(self) -> float:
+            """Conversion factor to plain dimensionless units.
+
+            Raises ``DimensionalityError`` if the array is not dimensionless.
+            Used by operations that mix in a bare number (add/sub/mod/floordiv/
+            compare): pint requires a dimensionless quantity and operates on its
+            value in base units rather than the intermediate (scaled) units such
+            as ``cm*s/m/ms``.
+            """
+            if not self.dimensionless:
+                msg = (
+                    "Cannot combine a bare number with a quantity that has "
+                    f"dimensions ({self._units_str})"
+                )
+                raise DimensionalityError(msg)
+            return self._registry._get_conversion_factor(
+                self._units_str,
+                "dimensionless",
+            )
+
+        def _bare_base_magnitude(self) -> NDArray[Any]:
+            """Magnitude in base (dimensionless) units, for mixing with a bare number."""
+            return self._magnitude * self._dimensionless_factor()
+
+        def _bare_compare_magnitude(self, mag: NDArray[Any] | float) -> NDArray[Any]:
+            """LHS magnitude for comparing against a bare number.
+
+            Comparison against zero is allowed for any dimensionality (pint);
+            otherwise the quantity must be dimensionless and is taken in base
+            units.
+            """
+            if bool(np.all(np.asarray(mag) == 0)):
+                return self._magnitude
+            return self._bare_base_magnitude()
 
         def __add__(
             self,
             other: ArrayQuantity | ScalarQuantity | float,
         ) -> ArrayQuantity:
             mag, units = self._get_other_mag_and_units(other)
-            if units is not None and units != self._units_str:
-                factor = self._registry._get_conversion_factor(
-                    units,
-                    self._units_str,
+            if units is None:
+                # Adding a bare number/array: zero is allowed for any quantity
+                # (pint keeps its units); otherwise require dimensionless and
+                # operate in base units.
+                if bool(np.all(np.asarray(mag) == 0)):
+                    return ArrayQuantity(
+                        self._magnitude + mag,
+                        self._units_str,
+                        self._registry,
+                    )
+                return ArrayQuantity(
+                    self._bare_base_magnitude() + mag,
+                    "dimensionless",
+                    self._registry,
                 )
-                mag = mag * factor
+            special = self._offset_additive(mag, units, subtract=False)
+            if special is not None:
+                return special
             return ArrayQuantity(
-                self._magnitude + mag,
+                self._magnitude + self._align_to_self(mag, units),
                 self._units_str,
                 self._registry,
             )
@@ -545,14 +756,23 @@ if has_numpy:
             other: ArrayQuantity | ScalarQuantity | float,
         ) -> ArrayQuantity:
             mag, units = self._get_other_mag_and_units(other)
-            if units is not None and units != self._units_str:
-                factor = self._registry._get_conversion_factor(
-                    units,
-                    self._units_str,
+            if units is None:
+                if bool(np.all(np.asarray(mag) == 0)):
+                    return ArrayQuantity(
+                        self._magnitude - mag,
+                        self._units_str,
+                        self._registry,
+                    )
+                return ArrayQuantity(
+                    self._bare_base_magnitude() - mag,
+                    "dimensionless",
+                    self._registry,
                 )
-                mag = mag * factor
+            special = self._offset_additive(mag, units, subtract=True)
+            if special is not None:
+                return special
             return ArrayQuantity(
-                self._magnitude - mag,
+                self._magnitude - self._align_to_self(mag, units),
                 self._units_str,
                 self._registry,
             )
@@ -573,17 +793,9 @@ if has_numpy:
             other: ArrayQuantity | ScalarQuantity | float,
         ) -> ArrayQuantity:
             mag, units = self._get_other_mag_and_units(other)
-            if units is not None:
-                new_units = str(
-                    self._unit_obj * self._registry.Unit(units),
-                )
-            else:
-                new_units = self._units_str
-            return ArrayQuantity(
-                self._magnitude * mag,
-                new_units,
-                self._registry,
-            )
+            self._ensure_multiplicative(units)
+            new_units = self._combine_units(units, operator.mul)
+            return self._wrap(self._magnitude * mag, new_units)
 
         def __rmul__(
             self,
@@ -596,116 +808,270 @@ if has_numpy:
             other: ArrayQuantity | ScalarQuantity | float,
         ) -> ArrayQuantity:
             mag, units = self._get_other_mag_and_units(other)
-            if units is not None:
-                new_units = str(
-                    self._unit_obj / self._registry.Unit(units),
-                )
-            else:
-                new_units = self._units_str
-            return ArrayQuantity(
-                self._magnitude / mag,
-                new_units,
-                self._registry,
-            )
+            self._ensure_multiplicative(units)
+            new_units = self._combine_units(units, operator.truediv)
+            return self._wrap(self._magnitude / mag, new_units)
 
         def __rtruediv__(
             self,
             other: ArrayQuantity | ScalarQuantity | float,
         ) -> ArrayQuantity:
             mag, units = self._get_other_mag_and_units(other)
-            if units is not None:
-                new_units = str(
-                    self._registry.Unit(units) / self._unit_obj,
+            self._ensure_multiplicative(units)
+            new_units = self._combine_units(
+                units,
+                operator.truediv,
+                reverse=True,
+                bare=str(self._registry.Unit("dimensionless") / self._unit_obj),
+            )
+            return self._wrap(mag / self._magnitude, new_units)
+
+        def __floordiv__(
+            self,
+            other: ArrayQuantity | ScalarQuantity | float,
+        ) -> ArrayQuantity:
+            mag, units = self._get_other_mag_and_units(other)
+            if units is None:
+                # bare number: dimensionless-only, operate in base units.
+                return ArrayQuantity(
+                    np.floor_divide(self._bare_base_magnitude(), mag),
+                    "dimensionless",
+                    self._registry,
                 )
-            else:
-                new_units = str(
-                    self._registry.Unit("dimensionless") / self._unit_obj,
-                )
+            # quantity: requires compatible dimensions; yields a plain number.
+            factor = self._registry._get_conversion_factor(units, self._units_str)
             return ArrayQuantity(
-                mag / self._magnitude,
-                new_units,
+                np.floor_divide(self._magnitude, mag * factor),
+                "dimensionless",
                 self._registry,
             )
 
-        def __pow__(self, exp: float) -> ArrayQuantity:
-            new_units = str(self._unit_obj**exp)
+        def __rfloordiv__(
+            self,
+            other: ArrayQuantity | ScalarQuantity | float,
+        ) -> ArrayQuantity:
+            mag, _units = self._get_other_mag_and_units(other)
             return ArrayQuantity(
-                self._magnitude**exp,
-                new_units,
+                np.floor_divide(mag, self._bare_base_magnitude()),
+                "dimensionless",
                 self._registry,
             )
 
-        def __eq__(self, other: object) -> bool:
+        def __mod__(
+            self,
+            other: ArrayQuantity | ScalarQuantity | float,
+        ) -> ArrayQuantity:
+            mag, units = self._get_other_mag_and_units(other)
+            if units is None:
+                # bare number: dimensionless-only; pint keeps the dividend's units
+                # but operates on the base-unit value.
+                factor = self._dimensionless_factor()
+                base_remainder = np.mod(self._magnitude * factor, mag)
+                return ArrayQuantity(
+                    base_remainder / factor,
+                    self._units_str,
+                    self._registry,
+                )
+            factor = self._registry._get_conversion_factor(units, self._units_str)
+            return ArrayQuantity(
+                np.mod(self._magnitude, mag * factor),
+                self._units_str,
+                self._registry,
+            )
+
+        def __rmod__(
+            self,
+            other: ArrayQuantity | ScalarQuantity | float,
+        ) -> ArrayQuantity:
+            mag, _units = self._get_other_mag_and_units(other)
+            return ArrayQuantity(
+                np.mod(mag, self._bare_base_magnitude()),
+                "dimensionless",
+                self._registry,
+            )
+
+        def __divmod__(
+            self,
+            other: ArrayQuantity | ScalarQuantity | float,
+        ) -> tuple[ArrayQuantity, ArrayQuantity]:
+            return (self.__floordiv__(other), self.__mod__(other))
+
+        def __rdivmod__(
+            self,
+            other: ArrayQuantity | ScalarQuantity | float,
+        ) -> tuple[ArrayQuantity, ArrayQuantity]:
+            return (self.__rfloordiv__(other), self.__rmod__(other))
+
+        def __pow__(self, exp: Any) -> ArrayQuantity:
+            exp_mag, exp_units = self._get_other_mag_and_units(exp)
+            if exp_units is not None:
+                # a quantity exponent must be dimensionless; use its base value
+                exp_mag = exp_mag * self._registry._get_conversion_factor(
+                    exp_units, "dimensionless"
+                )
+            if np.ndim(exp_mag) == 0 and exp_mag not in (0, 1):
+                # Powering an offset/log unit (other than **0 or **1) is ambiguous.
+                self._ensure_multiplicative()
+            if np.ndim(exp_mag) > 0:
+                # An array exponent is only well-defined (single output unit) when
+                # the base is dimensionless, like pint.
+                if not self.dimensionless:
+                    msg = "Cannot raise a dimensional quantity to an array power"
+                    raise DimensionalityError(msg)
+                base = self._magnitude * self._dimensionless_factor()
+                return ArrayQuantity(base**exp_mag, "dimensionless", self._registry)
+            new_units = str(self._unit_obj**exp_mag)
+            return ArrayQuantity(self._magnitude**exp_mag, new_units, self._registry)
+
+        def __rpow__(self, base: Any) -> ArrayQuantity:
+            # number ** dimensionless-array -> dimensionless (operate in base).
+            base_mag, _ = self._get_other_mag_and_units(base)
+            exp = self._bare_base_magnitude()
+            return ArrayQuantity(
+                np.asarray(base_mag) ** exp, "dimensionless", self._registry
+            )
+
+        def __matmul__(
+            self,
+            other: ArrayQuantity | ScalarQuantity | float,
+        ) -> ArrayQuantity:
+            mag, units = self._get_other_mag_and_units(other)
+            new_units = self._combine_units(units, operator.mul)
+            return self._wrap(self._magnitude @ mag, new_units)
+
+        def __rmatmul__(
+            self,
+            other: ArrayQuantity | ScalarQuantity | float,
+        ) -> ArrayQuantity:
+            mag, units = self._get_other_mag_and_units(other)
+            new_units = self._combine_units(units, operator.mul, reverse=True)
+            return self._wrap(mag @ self._magnitude, new_units)
+
+        def __eq__(self, other: object) -> Any:
+            # Elementwise comparison like pint/numpy: a bare value is compared in
+            # base units for a dimensionless quantity; mismatched dimensions give
+            # all-False rather than raising.
             if isinstance(other, ArrayQuantity):
-                if other._units_str != self._units_str:
-                    factor = self._registry._get_conversion_factor(
-                        other._units_str,
-                        self._units_str,
-                    )
-                    return bool(
-                        np.array_equal(self._magnitude, other._magnitude * factor),
-                    )
-                return bool(np.array_equal(self._magnitude, other._magnitude))
-            if isinstance(other, ScalarQuantity):
-                return bool(np.array_equal(self._magnitude, other.magnitude))
-            if isinstance(other, (np.ndarray, list, tuple, int, float, complex)):
-                return bool(np.array_equal(self._magnitude, other))
-            return False
+                other_unit: str | None = other._units_str
+                other_mag = np.asarray(other._magnitude)
+            elif isinstance(other, ScalarQuantity):
+                other_unit = str(other.units)
+                other_mag = np.asarray(other.magnitude)
+            elif _RustArrayQuantity is not None and isinstance(
+                other, _RustArrayQuantity
+            ):
+                other_unit = other._units_str
+                other_mag = np.asarray(other.m)
+            elif isinstance(other, (np.ndarray, list, tuple, int, float, complex)):
+                other_unit = None
+                other_mag = np.asarray(other)
+            else:
+                return NotImplemented
+            lhs = np.asarray(self._magnitude)
+            if other_unit is None:
+                if self.dimensionless:
+                    return lhs * self._dimensionless_factor() == other_mag
+                # Dimensional vs bare: only an all-zero operand compares (zero is
+                # zero in any unit, like pint); a non-zero bare operand is unequal.
+                if bool(np.all(other_mag == 0)):
+                    return lhs == other_mag
+                return np.zeros(
+                    np.broadcast_shapes(lhs.shape, other_mag.shape), dtype=bool
+                )
+            try:
+                other_mag = _convert_mag(
+                    other_mag, other_unit, self._units_str, self._registry
+                )
+            except Exception:
+                return np.zeros(
+                    np.broadcast_shapes(lhs.shape, np.shape(other_mag)), dtype=bool
+                )
+            return lhs == other_mag
 
-        def __ne__(self, other: object) -> bool:
-            return not self.__eq__(other)
+        def __ne__(self, other: object) -> Any:
+            result = self.__eq__(other)
+            if result is NotImplemented:
+                return NotImplemented
+            return np.logical_not(result)
 
-        def __lt__(
+        def _align_to_self(
+            self, mag: NDArray[Any] | float, units: str
+        ) -> NDArray[Any] | float:
+            """Scale `mag` (expressed in `units`) into self's units.
+
+            A no-op when `units` already matches; the ratio is scale-invariant so
+            offset/log units compare correctly without applying the offset.
+            """
+            if units != self._units_str:
+                mag = mag * self._registry._get_conversion_factor(
+                    units, self._units_str
+                )
+            return mag
+
+        def _offset_additive(
+            self,
+            mag: NDArray[Any] | float,
+            units: str,
+            *,
+            subtract: bool,
+        ) -> ArrayQuantity | None:
+            """Offset/log additive calculus when both operands are absolute
+            (non-multiplicative) units, mirroring the scalar path.
+
+            ``abs + abs`` is ambiguous and raises; ``abs - abs`` yields a delta
+            (the element-wise difference after an offset/log-aware conversion).
+            Returns ``None`` when this rule does not apply, so the caller uses the
+            ordinary additive path (e.g. ``degC + delta_degC``).
+            """
+            reg = self._registry
+            if not (
+                reg._is_non_multiplicative(self._units_str)
+                and reg._is_non_multiplicative(units)
+            ):
+                return None
+            if not subtract:
+                msg = "Ambiguous operation with offset unit."
+                raise OffsetUnitCalculusError(msg)
+            other = np.asarray(mag, dtype=float)
+            conv = np.array(
+                [
+                    reg.Quantity(float(x), units).to(self._units_str).magnitude
+                    for x in other.ravel()
+                ]
+            ).reshape(other.shape)
+            delta_unit = str(
+                (
+                    reg.Quantity(0.0, self._units_str)
+                    - reg.Quantity(0.0, self._units_str)
+                ).units
+            )
+            return ArrayQuantity(self._magnitude - conv, delta_unit, reg)
+
+        def _order(
             self,
             other: ArrayQuantity | ScalarQuantity | float,
+            op: Callable[[Any, Any], Any],
         ) -> Any:
+            """Shared body of the ordered comparisons; `op` is the operator."""
+            if np.iscomplexobj(self._magnitude):
+                msg = "Cannot order complex quantities"
+                raise TypeError(msg)
             mag, units = self._get_other_mag_and_units(other)
-            if units is not None and units != self._units_str:
-                factor = self._registry._get_conversion_factor(
-                    units,
-                    self._units_str,
-                )
-                mag = mag * factor
-            return self._magnitude < mag
+            if units is None:
+                return op(self._bare_compare_magnitude(mag), mag)
+            return op(self._magnitude, self._align_to_self(mag, units))
 
-        def __le__(
-            self,
-            other: ArrayQuantity | ScalarQuantity | float,
-        ) -> Any:
-            mag, units = self._get_other_mag_and_units(other)
-            if units is not None and units != self._units_str:
-                factor = self._registry._get_conversion_factor(
-                    units,
-                    self._units_str,
-                )
-                mag = mag * factor
-            return self._magnitude <= mag
+        def __lt__(self, other: ArrayQuantity | ScalarQuantity | float) -> Any:
+            return self._order(other, operator.lt)
 
-        def __gt__(
-            self,
-            other: ArrayQuantity | ScalarQuantity | float,
-        ) -> Any:
-            mag, units = self._get_other_mag_and_units(other)
-            if units is not None and units != self._units_str:
-                factor = self._registry._get_conversion_factor(
-                    units,
-                    self._units_str,
-                )
-                mag = mag * factor
-            return self._magnitude > mag
+        def __le__(self, other: ArrayQuantity | ScalarQuantity | float) -> Any:
+            return self._order(other, operator.le)
 
-        def __ge__(
-            self,
-            other: ArrayQuantity | ScalarQuantity | float,
-        ) -> Any:
-            mag, units = self._get_other_mag_and_units(other)
-            if units is not None and units != self._units_str:
-                factor = self._registry._get_conversion_factor(
-                    units,
-                    self._units_str,
-                )
-                mag = mag * factor
-            return self._magnitude >= mag
+        def __gt__(self, other: ArrayQuantity | ScalarQuantity | float) -> Any:
+            return self._order(other, operator.gt)
+
+        def __ge__(self, other: ArrayQuantity | ScalarQuantity | float) -> Any:
+            return self._order(other, operator.ge)
 
         def __bool__(self) -> bool:
             return bool(np.any(self._magnitude != 0))
@@ -739,6 +1105,24 @@ if has_numpy:
         _MATCHING_DIMS_UFUNCS: frozenset[np.ufunc] = frozenset()
         # Matching-dims ufuncs where a bare operand must be dimensionless
         _BARE_STRICT_UFUNCS: frozenset[np.ufunc] = frozenset()
+        # Angular-conversion ufuncs mapped to their target unit. The operand must
+        # be an angle or dimensionless (treated as radians); a dimensional operand
+        # raises, matching pint.
+        _ANGLE_CONVERT_UFUNCS: dict[np.ufunc, str] = {}  # noqa: RUF012
+
+        def _angle_convert(self, target: str, mag: Any, unit: Unit | None) -> Any:
+            if unit is None:
+                src = "radian"  # a bare operand is treated as radians
+            elif bool(unit.dimensionless):
+                # dimensionless (possibly scaled): take the base value as radians
+                mag = mag * self._registry._get_conversion_factor(
+                    str(unit), "dimensionless"
+                )
+                src = "radian"
+            else:
+                src = str(unit)  # an angle; conversion below rejects non-angles
+            factor = self._registry._get_conversion_factor(src, target)
+            return _make_result(mag * factor, target, self._registry)
 
         def _ufunc_output_units(
             self,
@@ -806,7 +1190,6 @@ if has_numpy:
             and arctan2 is scaled in ``_check_trig_units``, so neither takes part
             in the bare-number handling.
             """
-            from pintrs import DimensionalityError  # noqa: PLC0415
 
             if ufunc not in self._MATCHING_DIMS_UFUNCS:
                 return processed
@@ -861,7 +1244,6 @@ if has_numpy:
             otherwise ``sin(pi * (8 ms / 8 s))`` would wrongly use ``pi`` instead
             of ``pi * 0.001``. Bare (unitless) operands are left untouched.
             """
-            from pintrs import DimensionalityError  # noqa: PLC0415
 
             u = input_units[idx]
             if u is None:
@@ -887,7 +1269,6 @@ if has_numpy:
             input_units: list[Unit | None],
         ) -> list[NDArray[Any] | float]:
             """Validate and convert units for trig/exp/log/power ufuncs."""
-            from pintrs import DimensionalityError  # noqa: PLC0415
 
             if ufunc in self._TRIG_UFUNCS:
                 u = input_units[0] if input_units else None
@@ -922,6 +1303,18 @@ if has_numpy:
                     ufunc, processed, input_units, 1
                 )
                 base_u = input_units[0]
+                if base_u is not None and self._registry._is_non_multiplicative(
+                    str(base_u)
+                ):
+                    # Powering an offset/log base (other than **0 or **1) is
+                    # ambiguous, like the scalar `**` operator.
+                    exp_arr = np.asarray(processed[1])
+                    if exp_arr.size != 1 or float(exp_arr.reshape(-1)[0]) not in (
+                        0.0,
+                        1.0,
+                    ):
+                        msg = "Ambiguous operation with offset unit."
+                        raise OffsetUnitCalculusError(msg)
                 if base_u is not None:
                     if self._registry.Quantity(1.0, str(base_u)).dimensionless:
                         # A (scaled-)dimensionless base contributes its true
@@ -984,8 +1377,16 @@ if has_numpy:
                     processed.append(np.asarray(inp.m))
                     input_units.append(self._registry.Unit(inp._units_str))
                 else:
-                    processed.append(inp)
+                    # A bare list/tuple operand must become an ndarray so later
+                    # base-unit scaling (``operand * factor``) works.
+                    processed.append(
+                        np.asarray(inp) if isinstance(inp, (list, tuple)) else inp
+                    )
                     input_units.append(None)
+
+            angle_target = self._ANGLE_CONVERT_UFUNCS.get(ufunc)
+            if angle_target is not None and method == "__call__":
+                return self._angle_convert(angle_target, processed[0], input_units[0])
 
             processed = self._check_additive_compat(
                 ufunc,
@@ -1042,9 +1443,11 @@ if has_numpy:
                 return ArrayQuantity(result, out_units, self._registry)
             if np.isscalar(result):
                 magnitude = result.item() if isinstance(result, np.generic) else result
+                if isinstance(magnitude, bool):
+                    return result
                 if isinstance(magnitude, (int, float)):
                     return self._registry.Quantity(float(magnitude), out_units)
-                if isinstance(magnitude, str):
+                if isinstance(magnitude, (complex, str)):
                     return self._registry.Quantity(magnitude, out_units)
             return result
 
@@ -1114,6 +1517,15 @@ if has_numpy:
     # arctan2 takes two args with matching units and returns radians
     ArrayQuantity._ARCTAN2_UFUNCS = frozenset({np.arctan2})
 
+    # Angular-conversion ufuncs: radians/deg2rad -> radian, degrees/rad2deg ->
+    # degree (a dimensionless operand is treated as radians; pint parity).
+    ArrayQuantity._ANGLE_CONVERT_UFUNCS = {
+        np.radians: "radian",
+        np.deg2rad: "radian",
+        np.degrees: "degree",
+        np.rad2deg: "degree",
+    }
+
     # NB: mod/fmod/remainder are intentionally absent. pint applies them to the
     # raw magnitudes (no unit conversion) and keeps the left operand's unit, even
     # for differently-scaled or incompatible units, so they must not be aligned.
@@ -1156,6 +1568,8 @@ if has_numpy:
             np.not_equal,
             np.maximum,
             np.minimum,
+            np.fmax,
+            np.fmin,
             np.hypot,
         },
     )
@@ -1192,8 +1606,8 @@ if has_numpy:
                 dtype=dtype,
                 axis=axis,
             )
-        start_mag = _convert_mag(_mag_of(start), start_u, out_unit, reg)
-        stop_mag = _convert_mag(_mag_of(stop), stop_u, out_unit, reg)
+        start_mag = _align_operand(_mag_of(start), start_u, out_unit, reg)
+        stop_mag = _align_operand(_mag_of(stop), stop_u, out_unit, reg)
         result = linspace_fn(
             start_mag,
             stop_mag,
@@ -1221,10 +1635,13 @@ if has_numpy:
         dtype: Any = None,
         axis: int = 0,
     ) -> Any:
-        # logspace inputs must be dimensionless; any Quantity output needs
-        # its own unit set separately by the caller.
-        start_mag = _mag_of(start)
-        stop_mag = _mag_of(stop)
+        # logspace exponents must be dimensionless; a dimensionless-scaled
+        # Quantity exponent is taken at its base value (issue #5).
+        reg = _first_registry(start, stop)
+        start_mag = _convert_mag(
+            _mag_of(start), _unit_str_of(start), "dimensionless", reg
+        )
+        stop_mag = _convert_mag(_mag_of(stop), _unit_str_of(stop), "dimensionless", reg)
         return np.logspace(start_mag, stop_mag, num, endpoint, base, dtype, axis)
 
     @implements(np.geomspace)
@@ -1242,8 +1659,8 @@ if has_numpy:
         out_unit = start_u or stop_u
         if out_unit is None:
             return np.geomspace(start, stop, num, endpoint, dtype, axis)
-        start_mag = _convert_mag(_mag_of(start), start_u, out_unit, reg)
-        stop_mag = _convert_mag(_mag_of(stop), stop_u, out_unit, reg)
+        start_mag = _align_operand(_mag_of(start), start_u, out_unit, reg)
+        stop_mag = _align_operand(_mag_of(stop), stop_u, out_unit, reg)
         result = np.geomspace(start_mag, stop_mag, num, endpoint, dtype, axis)
         return _make_result(result, out_unit, reg)
 
@@ -1277,8 +1694,8 @@ if has_numpy:
         unit = a_u or fill_u
         mag = _mag_of(a)
         fill_mag = _mag_of(fill_value)
-        if fill_u is not None and a_u is not None and reg is not None:
-            fill_mag = _convert_mag(fill_mag, fill_u, a_u, reg)
+        if a_u is not None and reg is not None:
+            fill_mag = _convert_mag(fill_mag, _bare_src(fill_u, a_u, reg), a_u, reg)
         result = np.full_like(
             mag, fill_mag, dtype=dtype, order=order, subok=subok, shape=shape
         )
@@ -1358,8 +1775,8 @@ if has_numpy:
         arr_u = _unit_str_of(arr)
         val_u = _unit_str_of(values)
         out_unit = arr_u or val_u
-        arr_mag = _convert_mag(_mag_of(arr), arr_u, out_unit or "", reg)
-        val_mag = _convert_mag(_mag_of(values), val_u, out_unit or "", reg)
+        arr_mag = _align_operand(_mag_of(arr), arr_u, out_unit, reg)
+        val_mag = _align_operand(_mag_of(values), val_u, out_unit, reg)
         result = np.append(arr_mag, val_mag, axis=axis)
         if out_unit is None:
             return result
@@ -1376,15 +1793,9 @@ if has_numpy:
         ] = "same_kind",
     ) -> Any:
         reg = _first_registry(*arrays)
-        out_unit: str | None = None
-        for a in arrays:
-            u = _unit_str_of(a)
-            if u is not None:
-                out_unit = u
-                break
+        out_unit = _first_unit_of(arrays)
         mags = [
-            _convert_mag(_mag_of(a), _unit_str_of(a), out_unit or "", reg)
-            for a in arrays
+            _align_operand(_mag_of(a), _unit_str_of(a), out_unit, reg) for a in arrays
         ]
         result = np.concatenate(
             mags,
@@ -1404,15 +1815,9 @@ if has_numpy:
         out: Any = None,
     ) -> Any:
         reg = _first_registry(*arrays)
-        out_unit: str | None = None
-        for a in arrays:
-            u = _unit_str_of(a)
-            if u is not None:
-                out_unit = u
-                break
+        out_unit = _first_unit_of(arrays)
         mags = [
-            _convert_mag(_mag_of(a), _unit_str_of(a), out_unit or "", reg)
-            for a in arrays
+            _align_operand(_mag_of(a), _unit_str_of(a), out_unit, reg) for a in arrays
         ]
         result = np.stack(mags, axis=axis, out=out)
         if out_unit is None:
@@ -1431,8 +1836,8 @@ if has_numpy:
         x_u = _unit_str_of(x)
         y_u = _unit_str_of(y)
         out_unit = x_u or y_u
-        x_mag = _convert_mag(_mag_of(x), x_u, out_unit or "", reg)
-        y_mag = _convert_mag(_mag_of(y), y_u, out_unit or "", reg)
+        x_mag = _align_operand(_mag_of(x), x_u, out_unit, reg)
+        y_mag = _align_operand(_mag_of(y), y_u, out_unit, reg)
         result = np.where(condition, x_mag, y_mag)
         if out_unit is None:
             return result
@@ -1449,15 +1854,13 @@ if has_numpy:
         reg = _first_registry(a, a_min, a_max)
         unit = _unit_str_of(a)
         a_mag = _mag_of(a)
-        # Bare bounds are intentionally treated as the array's own unit (a
-        # pintrs convenience that differs from pint's strict rejection).
         a_min_mag = (
-            _convert_mag(_mag_of(a_min), _unit_str_of(a_min), unit or "", reg)
+            _align_operand(_mag_of(a_min), _unit_str_of(a_min), unit, reg)
             if a_min is not None
             else None
         )
         a_max_mag = (
-            _convert_mag(_mag_of(a_max), _unit_str_of(a_max), unit or "", reg)
+            _align_operand(_mag_of(a_max), _unit_str_of(a_max), unit, reg)
             if a_max is not None
             else None
         )
@@ -1476,12 +1879,76 @@ if has_numpy:
             return result
         return _make_result(result, unit, reg)
 
-    @implements(np.reshape)
-    def _reshape_impl(a: Any, *args: Any, **kwargs: Any) -> Any:
-        mag = _mag_of(a)
+    # ``np.fix`` is deprecated in NumPy 2.5; fetch it dynamically so static
+    # analysis does not flag the deprecation, register a handler for parity, but
+    # compute with the equivalent (non-deprecated) ``np.trunc`` internally.
+    _np_fix_fn: Any = getattr(np, "fix", None)
+    if _np_fix_fn is not None:
+
+        @implements(_np_fix_fn)
+        def _fix_impl(x: Any, out: Any = None) -> Any:
+            reg = _first_registry(x)
+            unit = _unit_str_of(x)
+            result = np.trunc(_mag_of(x), out=out)
+            if unit is None:
+                return result
+            return _make_result(result, unit, reg)
+
+    @implements(np.average)
+    def _average_impl(
+        a: Any,
+        axis: Any = None,
+        weights: Any = None,
+        returned: bool = False,
+    ) -> Any:
+        reg = _first_registry(a)
         unit = _unit_str_of(a)
-        reg = _registry_of(a)
-        result = np.reshape(mag, *args, **kwargs)
+        w = _mag_of(weights) if weights is not None else None
+        result = np.average(_mag_of(a), axis=axis, weights=w, returned=returned)  # type: ignore[call-overload]
+        if unit is None:
+            return result
+        if returned:
+            avg, sum_w = result
+            return (_make_result(avg, unit, reg), sum_w)
+        return _make_result(result, unit, reg)
+
+    @implements(np.insert)
+    def _insert_impl(arr: Any, obj: Any, values: Any, axis: int | None = None) -> Any:
+        reg = _first_registry(arr, values)
+        unit = _unit_str_of(arr)
+        val_mag = _align_operand(_mag_of(values), _unit_str_of(values), unit, reg)
+        result = np.insert(_mag_of(arr), obj, val_mag, axis=axis)
+        if unit is None:
+            return result
+        return _make_result(result, unit, reg)
+
+    @implements(np.nan_to_num)
+    def _nan_to_num_impl(
+        x: Any,
+        copy: bool = True,
+        nan: float = 0.0,
+        posinf: float | None = None,
+        neginf: float | None = None,
+    ) -> Any:
+        reg = _first_registry(x)
+        unit = _unit_str_of(x)
+
+        def _repl(v: Any) -> float | None:
+            # Replacement values are aligned to the array's units: a quantity is
+            # converted; a bare value is dimensionless (base for a dimensionless
+            # array, zero allowed, else DimensionalityError).
+            if v is None:
+                return None
+            v_mag = np.asarray(_mag_of(v), dtype=float)
+            return float(np.asarray(_align_operand(v_mag, _unit_str_of(v), unit, reg)))
+
+        result = np.nan_to_num(
+            _mag_of(x),
+            copy=copy,
+            nan=_repl(nan) or 0.0,
+            posinf=_repl(posinf),
+            neginf=_repl(neginf),
+        )
         if unit is None:
             return result
         return _make_result(result, unit, reg)
@@ -1527,6 +1994,22 @@ if has_numpy:
         np.copy,
         np.real,
         np.imag,
+        # Shape/axis transforms and percentile-style reductions: each preserves
+        # the unit and forwards its args unchanged, so the unary-reducer factory
+        # covers them exactly.
+        np.reshape,
+        np.percentile,
+        np.quantile,
+        np.expand_dims,
+        np.moveaxis,
+        np.swapaxes,
+        np.rollaxis,
+        np.tile,
+        np.repeat,
+        np.diag,
+        np.diagonal,
+        np.trace,
+        np.take,
     )
     for _reducer_func in _reducer_funcs:
         implements(_reducer_func)(_make_unary_reducer(_reducer_func))
@@ -1564,35 +2047,18 @@ if has_numpy:
     @implements(np.cumprod)
     def _cumprod_impl(a: Any, *args: Any, **kwargs: Any) -> Any:
         unit = _unit_str_of(a)
+        mag = _mag_of(a)
         if unit is not None:
-            from pintrs import DimensionalityError  # noqa: PLC0415
-
             reg = _registry_of(a)
             scalar = reg.Quantity(1.0, unit)
             if not scalar.dimensionless:
                 msg = "Cannot apply cumprod to a dimensioned quantity"
                 raise DimensionalityError(msg)
-        return np.cumprod(_mag_of(a), *args, **kwargs)
-
-    @implements(np.percentile)
-    def _percentile_impl(a: Any, q: Any, *args: Any, **kwargs: Any) -> Any:
-        mag = _mag_of(a)
-        unit = _unit_str_of(a)
-        reg = _registry_of(a)
-        result = np.percentile(mag, q, *args, **kwargs)
-        if unit is None:
-            return result
-        return _make_result(result, unit, reg)
-
-    @implements(np.quantile)
-    def _quantile_impl(a: Any, q: Any, *args: Any, **kwargs: Any) -> Any:
-        mag = _mag_of(a)
-        unit = _unit_str_of(a)
-        reg = _registry_of(a)
-        result = np.quantile(mag, q, *args, **kwargs)
-        if unit is None:
-            return result
-        return _make_result(result, unit, reg)
+            # Operate on base (dimensionless) values, like pint.
+            factor = reg._get_conversion_factor(unit, "dimensionless")
+            result = np.cumprod(mag * factor, *args, **kwargs)
+            return _make_result(result, "dimensionless", reg)
+        return np.cumprod(mag, *args, **kwargs)
 
     def _binary_product_handler(np_func: Any) -> Any:
         def _impl(a: Any, b: Any, *args: Any, **kwargs: Any) -> Any:
@@ -1656,8 +2122,10 @@ if has_numpy:
                 x_u = _unit_obj_of(x)
                 result = _trap_fn(y_mag, x_mag, axis=axis)
             else:
-                x_u = None
-                result = _trap_fn(y_mag, dx=dx, axis=axis)
+                # dx may itself be a quantity; integrate over its magnitude and
+                # carry its unit into the result (pint parity).
+                x_u = _unit_obj_of(dx)
+                result = _trap_fn(y_mag, dx=_mag_of(dx), axis=axis)
             if y_u is not None and x_u is not None:
                 out_u = str(y_u * x_u)
             elif y_u is not None:
@@ -1671,6 +2139,45 @@ if has_numpy:
         implements(_trapezoid)(_trapezoid_impl)
 
     # ----- Long-tail handlers -----
+
+    @implements(np.einsum)
+    def _einsum_impl(*operands: Any, **kwargs: Any) -> Any:
+        # einsum sums products of one element from each operand, so the result
+        # unit is the product of all operand units (pint parity). Non-array
+        # arguments (the subscripts string, index sublists) pass through.
+        reg = _first_registry(*operands)
+        out_u: Any = None
+        processed: list[Any] = []
+        for o in operands:
+            u = _unit_obj_of(o)
+            if u is not None:
+                out_u = u if out_u is None else out_u * u
+                processed.append(_mag_of(o))
+            else:
+                processed.append(o)
+        result = np.einsum(*processed, **kwargs)
+        if out_u is None:
+            return result
+        return _make_result(result, str(out_u), reg)
+
+    @implements(np.unwrap)
+    def _unwrap_impl(p: Any, *args: Any, **kwargs: Any) -> Any:
+        # Unwrap operates on the magnitude (phase) and preserves the unit.
+        unit = _unit_str_of(p)
+        reg = _registry_of(p)
+        result = np.unwrap(_mag_of(p), *args, **kwargs)
+        if unit is None:
+            return result
+        return _make_result(result, unit, reg)
+
+    @implements(np.searchsorted)
+    def _searchsorted_free_impl(
+        a: Any, v: Any, side: Literal["left", "right"] = "left", sorter: Any = None
+    ) -> Any:
+        reg = _first_registry(a, v)
+        a_unit = _unit_str_of(a)
+        v_mag = _align_operand(_mag_of(v), _unit_str_of(v), a_unit, reg)
+        return np.searchsorted(_mag_of(a), v_mag, side=side, sorter=sorter)
 
     _DIFF_SENTINEL = getattr(np, "_NoValue", object())
 
@@ -1742,7 +2249,7 @@ if has_numpy:
                 return str(f_unit)
             return str(f_unit / v_u)
 
-        if isinstance(result, list):
+        if isinstance(result, (list, tuple)):
             if not var_units:
                 var_units = [None] * len(result)
             return [
@@ -1764,22 +2271,22 @@ if has_numpy:
     ) -> Any:
         reg = _first_registry(x, xp, fp)
         xp_unit = _unit_str_of(xp)
-        x_mag = _convert_mag(_mag_of(x), _unit_str_of(x), xp_unit or "", reg)
+        x_mag = _align_operand(_mag_of(x), _unit_str_of(x), xp_unit, reg)
         xp_mag = _mag_of(xp)
         fp_mag = _mag_of(fp)
         fp_unit = _unit_str_of(fp)
         left_mag = (
-            _convert_mag(_mag_of(left), _unit_str_of(left), fp_unit or "", reg)
+            _align_operand(_mag_of(left), _unit_str_of(left), fp_unit, reg)
             if left is not None
             else None
         )
         right_mag = (
-            _convert_mag(_mag_of(right), _unit_str_of(right), fp_unit or "", reg)
+            _align_operand(_mag_of(right), _unit_str_of(right), fp_unit, reg)
             if right is not None
             else None
         )
         period_mag = (
-            _convert_mag(_mag_of(period), _unit_str_of(period), xp_unit or "", reg)
+            _align_operand(_mag_of(period), _unit_str_of(period), xp_unit, reg)
             if period is not None
             else None
         )
@@ -1808,66 +2315,6 @@ if has_numpy:
             out_u = str(a_u or v_u)
         return _make_result(result, out_u, reg)
 
-    @implements(np.expand_dims)
-    def _expand_dims_impl(a: Any, axis: Any) -> Any:
-        mag = _mag_of(a)
-        unit = _unit_str_of(a)
-        reg = _registry_of(a)
-        result = np.expand_dims(mag, axis)
-        if unit is None:
-            return result
-        return _make_result(result, unit, reg)
-
-    @implements(np.moveaxis)
-    def _moveaxis_impl(a: Any, source: Any, destination: Any) -> Any:
-        mag = _mag_of(a)
-        unit = _unit_str_of(a)
-        reg = _registry_of(a)
-        result = np.moveaxis(mag, source, destination)
-        if unit is None:
-            return result
-        return _make_result(result, unit, reg)
-
-    @implements(np.swapaxes)
-    def _swapaxes_impl(a: Any, axis1: int, axis2: int) -> Any:
-        mag = _mag_of(a)
-        unit = _unit_str_of(a)
-        reg = _registry_of(a)
-        result = np.swapaxes(mag, axis1, axis2)
-        if unit is None:
-            return result
-        return _make_result(result, unit, reg)
-
-    @implements(np.rollaxis)
-    def _rollaxis_impl(a: Any, axis: int, start: int = 0) -> Any:
-        mag = _mag_of(a)
-        unit = _unit_str_of(a)
-        reg = _registry_of(a)
-        result = np.rollaxis(mag, axis, start)
-        if unit is None:
-            return result
-        return _make_result(result, unit, reg)
-
-    @implements(np.tile)
-    def _tile_impl(a: Any, reps: Any) -> Any:
-        mag = _mag_of(a)
-        unit = _unit_str_of(a)
-        reg = _registry_of(a)
-        result = np.tile(mag, reps)
-        if unit is None:
-            return result
-        return _make_result(result, unit, reg)
-
-    @implements(np.repeat)
-    def _repeat_impl(a: Any, repeats: Any, axis: Any = None) -> Any:
-        mag = _mag_of(a)
-        unit = _unit_str_of(a)
-        reg = _registry_of(a)
-        result = np.repeat(mag, repeats, axis=axis)
-        if unit is None:
-            return result
-        return _make_result(result, unit, reg)
-
     @implements(np.pad)
     def _pad_impl(
         array: Any, pad_width: Any, mode: Any = "constant", **kwargs: Any
@@ -1875,78 +2322,23 @@ if has_numpy:
         mag = _mag_of(array)
         unit = _unit_str_of(array)
         reg = _registry_of(array)
+
+        def _pad_val(v: Any) -> Any:
+            return _align_operand(_mag_of(v), _unit_str_of(v), unit, reg)
+
         if "constant_values" in kwargs:
             cv = kwargs["constant_values"]
             if isinstance(cv, tuple):
-                kwargs["constant_values"] = tuple(
-                    _convert_mag(_mag_of(c), _unit_str_of(c), unit or "", reg)
-                    for c in cv
-                )
+                kwargs["constant_values"] = tuple(_pad_val(c) for c in cv)
             else:
-                kwargs["constant_values"] = _convert_mag(
-                    _mag_of(cv), _unit_str_of(cv), unit or "", reg
-                )
+                kwargs["constant_values"] = _pad_val(cv)
         if "end_values" in kwargs:
             ev = kwargs["end_values"]
             if isinstance(ev, tuple):
-                kwargs["end_values"] = tuple(
-                    _convert_mag(_mag_of(e), _unit_str_of(e), unit or "", reg)
-                    for e in ev
-                )
+                kwargs["end_values"] = tuple(_pad_val(e) for e in ev)
             else:
-                kwargs["end_values"] = _convert_mag(
-                    _mag_of(ev), _unit_str_of(ev), unit or "", reg
-                )
+                kwargs["end_values"] = _pad_val(ev)
         result = np.pad(mag, pad_width, mode=mode, **kwargs)
-        if unit is None:
-            return result
-        return _make_result(result, unit, reg)
-
-    @implements(np.diag)
-    def _diag_impl(v: Any, k: int = 0) -> Any:
-        mag = _mag_of(v)
-        unit = _unit_str_of(v)
-        reg = _registry_of(v)
-        result = np.diag(mag, k=k)
-        if unit is None:
-            return result
-        return _make_result(result, unit, reg)
-
-    @implements(np.diagonal)
-    def _diagonal_impl(a: Any, offset: int = 0, axis1: int = 0, axis2: int = 1) -> Any:
-        mag = _mag_of(a)
-        unit = _unit_str_of(a)
-        reg = _registry_of(a)
-        result = np.diagonal(mag, offset=offset, axis1=axis1, axis2=axis2)
-        if unit is None:
-            return result
-        return _make_result(result, unit, reg)
-
-    @implements(np.trace)
-    def _trace_impl(  # noqa: PLR0913
-        a: Any,
-        offset: int = 0,
-        axis1: int = 0,
-        axis2: int = 1,
-        dtype: Any = None,
-        out: Any = None,
-    ) -> Any:
-        mag = _mag_of(a)
-        unit = _unit_str_of(a)
-        reg = _registry_of(a)
-        result = np.trace(
-            mag, offset=offset, axis1=axis1, axis2=axis2, dtype=dtype, out=out
-        )
-        if unit is None:
-            return result
-        return _make_result(result, unit, reg)
-
-    @implements(np.take)
-    def _take_impl(a: Any, indices: Any, axis: Any = None, **kwargs: Any) -> Any:
-        mag = _mag_of(a)
-        unit = _unit_str_of(a)
-        reg = _registry_of(a)
-        result = np.take(mag, indices, axis=axis, **kwargs)
         if unit is None:
             return result
         return _make_result(result, unit, reg)
@@ -1980,15 +2372,9 @@ if has_numpy:
     def _make_stack_impl(np_func: Any) -> Any:
         def _impl(tup: Any, *args: Any, **kwargs: Any) -> Any:
             reg = _first_registry(*tup)
-            out_unit: str | None = None
-            for a in tup:
-                u = _unit_str_of(a)
-                if u is not None:
-                    out_unit = u
-                    break
+            out_unit = _first_unit_of(tup)
             mags = [
-                _convert_mag(_mag_of(a), _unit_str_of(a), out_unit or "", reg)
-                for a in tup
+                _align_operand(_mag_of(a), _unit_str_of(a), out_unit, reg) for a in tup
             ]
             result = np_func(mags, *args, **kwargs)
             if out_unit is None:
@@ -2078,17 +2464,17 @@ if has_numpy:
 
     # np.prod — units change per element; reject dimensioned input like cumprod
     @implements(np.prod)
-    def _prod_impl(a: Any, *args: Any, **kwargs: Any) -> Any:
+    def _prod_impl(a: Any, axis: Any = None, *args: Any, **kwargs: Any) -> Any:
         unit = _unit_str_of(a)
-        if unit is not None:
-            from pintrs import DimensionalityError  # noqa: PLC0415
-
-            reg = _registry_of(a)
-            scalar = reg.Quantity(1.0, unit)
-            if not scalar.dimensionless:
-                msg = "Cannot apply prod to a dimensioned quantity"
-                raise DimensionalityError(msg)
-        return np.prod(_mag_of(a), *args, **kwargs)
+        mag = np.asarray(_mag_of(a))
+        result = np.prod(mag, axis, *args, **kwargs)
+        if unit is None:
+            return result
+        reg = _registry_of(a) or _first_registry(a)
+        # Each factor multiplies the unit, so the product carries ``unit ** n``
+        # where n is the number of elements reduced (pint parity).
+        n = int(mag.size if axis is None else mag.shape[axis])
+        return _make_result(result, str(reg.Unit(unit) ** n), reg)
 
     @implements(np.result_type)
     def _result_type_impl(*arrays_and_dtypes: Any) -> Any:
@@ -2131,8 +2517,14 @@ if has_numpy:
         reg = _first_registry(a, b)
         m_a = _mag_of(a)
         m_b = _mag_of(b)
-        if u_a is not None and u_b is not None:
-            m_b = _convert_mag(m_b, u_b, u_a, reg)
+        ref = u_a or u_b
+        if ref is not None:
+            m_a = _align_operand(m_a, u_a, ref, reg)
+            m_b = _align_operand(m_b, u_b, ref, reg)
+        # atol shares the operands' units (a quantity is converted); rtol is
+        # dimensionless. Extract plain magnitudes so numpy does not recurse.
+        atol = _convert_mag(_mag_of(atol), _unit_str_of(atol), ref or "", reg)
+        rtol = _mag_of(rtol)
         return bool(np.allclose(m_a, m_b, rtol=rtol, atol=atol, equal_nan=equal_nan))
 
     @implements(np.isclose)
@@ -2148,8 +2540,12 @@ if has_numpy:
         reg = _first_registry(a, b)
         m_a = _mag_of(a)
         m_b = _mag_of(b)
-        if u_a is not None and u_b is not None:
-            m_b = _convert_mag(m_b, u_b, u_a, reg)
+        ref = u_a or u_b
+        if ref is not None:
+            m_a = _align_operand(m_a, u_a, ref, reg)
+            m_b = _align_operand(m_b, u_b, ref, reg)
+        atol = _convert_mag(_mag_of(atol), _unit_str_of(atol), ref or "", reg)
+        rtol = _mag_of(rtol)
         return np.isclose(m_a, m_b, rtol=rtol, atol=atol, equal_nan=equal_nan)
 
 else:

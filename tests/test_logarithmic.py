@@ -129,3 +129,64 @@ class TestLogarithmicArithmetic:
     def test_str(self) -> None:
         q = LogarithmicQuantity(10.0, "dBm")
         assert str(q) == "10.0 dBm"
+
+
+class TestLogarithmicUnitConversion:
+    """Logarithmic units (dB, Np, dBm) convert via their log/exp transform."""
+
+    def test_db_to_dimensionless(self, ureg: UnitRegistry) -> None:
+        # 1 dB = 10**(1/10) as a power ratio.
+        assert ureg.Quantity(1.0, "dB").to("dimensionless").magnitude == pytest.approx(
+            1.2589254117941673
+        )
+        assert ureg.Quantity(10.0, "dB").to("dimensionless").magnitude == pytest.approx(
+            10.0
+        )
+
+    def test_neper_to_dimensionless(self, ureg: UnitRegistry) -> None:
+        assert ureg.Quantity(1.0, "Np").to("dimensionless").magnitude == pytest.approx(
+            7.38905609893065
+        )
+
+    def test_dbm_to_watt(self, ureg: UnitRegistry) -> None:
+        assert ureg.Quantity(0.0, "dBm").to("watt").magnitude == pytest.approx(0.001)
+        assert ureg.Quantity(10.0, "dBm").to("milliwatt").magnitude == pytest.approx(
+            10.0
+        )
+
+    def test_dimensionless_to_db_roundtrip(self, ureg: UnitRegistry) -> None:
+        r = ureg.Quantity(1.2589254117941673, "").to("dB")
+        assert r.magnitude == pytest.approx(1.0)
+
+    def test_db_to_base_units(self, ureg: UnitRegistry) -> None:
+        assert ureg.Quantity(1.0, "dBm").to_base_units().magnitude == pytest.approx(
+            0.0012589254117941673
+        )
+
+    def test_db_plus_db_raises(self, ureg: UnitRegistry) -> None:
+        from pintrs import OffsetUnitCalculusError
+
+        with pytest.raises(OffsetUnitCalculusError):
+            _ = ureg.Quantity(10.0, "dB") + ureg.Quantity(3.0, "dB")
+
+
+class TestLogAndOffsetDeltaArithmetic:
+    def test_log_subtraction_all_units_give_delta(self, ureg: UnitRegistry) -> None:
+        for unit in ["dB", "dBW", "dBm", "octave", "decade", "Np"]:
+            d = ureg.Quantity(3.0, unit) - ureg.Quantity(1.0, unit)
+            assert d.magnitude == pytest.approx(2.0)
+            assert "delta" in str(d.units), unit
+
+    def test_delta_minus_absolute_is_absolute(self, ureg: UnitRegistry) -> None:
+        r = ureg.Quantity(10.0, "delta_degC") - ureg.Quantity(5.0, "degC")
+        assert r.magnitude == pytest.approx(5.0)
+        assert str(r.units) == "degree_Celsius"
+
+
+class TestPublicArrayClipMethod:
+    def test_clip_method_available(self, ureg: UnitRegistry) -> None:
+        import numpy as np
+
+        # The public ndarray-backed Quantity exposes .clip (delegated).
+        q = ureg.Quantity(np.array([1.0, 5.0, 10.0]), "")
+        np.testing.assert_allclose(q.clip(2, 8).magnitude, [2.0, 5.0, 8.0])

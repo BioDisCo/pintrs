@@ -116,3 +116,32 @@ class TestPandasIntegration:
         s = pd.Series(PintArray([1.0, 2.0, 3.0], dtype=dtype))
         avg = s.mean()
         assert abs(avg.magnitude - 2.0) < 1e-10
+
+
+class TestPintArrayVarianceUnits:
+    def test_var_squares_units(self, ureg: UnitRegistry) -> None:
+        s = pd.Series(PintArray([1.0, 2.0, 3.0], dtype=PintDtype("meter", ureg)))
+        v = s.var()
+        assert v.magnitude == pytest.approx(1.0)
+        assert str(v.units) == "meter ** 2"
+
+    def test_std_keeps_units(self, ureg: UnitRegistry) -> None:
+        s = pd.Series(PintArray([1.0, 2.0, 3.0], dtype=PintDtype("meter", ureg)))
+        assert str(s.std().units) == "meter"
+
+
+class TestPintArrayOffsetLogConversion:
+    """PintArray.to applies the offset/log transform, not a bare factor."""
+
+    def test_to_offset(self, ureg: UnitRegistry) -> None:
+        arr = PintArray([0.0, 10.0], dtype=PintDtype("degC", ureg)).to("kelvin")
+        np.testing.assert_allclose(np.asarray(arr._data, dtype=float), [273.15, 283.15])
+        assert arr._dtype.units == "kelvin"
+
+    def test_to_log(self, ureg: UnitRegistry) -> None:
+        arr = PintArray([0.0, 10.0], dtype=PintDtype("dBW", ureg)).to("watt")
+        np.testing.assert_allclose(np.asarray(arr._data, dtype=float), [1.0, 10.0])
+
+    def test_to_ordinary_unaffected(self, ureg: UnitRegistry) -> None:
+        arr = PintArray([1.0, 2.0], dtype=PintDtype("km", ureg)).to("m")
+        np.testing.assert_allclose(np.asarray(arr._data, dtype=float), [1000.0, 2000.0])

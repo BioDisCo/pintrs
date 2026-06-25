@@ -234,7 +234,13 @@ if has_pandas:
             # numpy reduction functions don't accept pandas-specific kwargs
             kwargs.pop("min_count", None)
             result = func(self._data, **kwargs)
-            return self._dtype.registry.Quantity(float(result), self._dtype.units)
+            reg = self._dtype.registry
+            # Variance carries squared units; the others keep the array's units.
+            if name == "var":
+                out_units = str(reg.Unit(self._dtype.units) ** 2)
+            else:
+                out_units = self._dtype.units
+            return reg.Quantity(float(result), out_units)
 
         def __array__(self, dtype: DTypeLike | None = None) -> NDArray[Any]:
             if dtype is not None:
@@ -248,11 +254,19 @@ if has_pandas:
                 units: Target unit string.
             """
             reg = self._dtype.registry
-            factor = reg._get_conversion_factor(self._dtype.units, units)
-            return PintArray(
-                self._data * factor,
-                dtype=PintDtype(units, reg),
-            )
+            src = self._dtype.units
+            if reg._is_non_multiplicative(src) or reg._is_non_multiplicative(units):
+                # Offset/log units need their full transform (degC -> kelvin adds
+                # 273.15; dBW -> watt exponentiates), not a single factor.
+                data = np.array(
+                    [
+                        reg.Quantity(float(v), src).to(units).magnitude
+                        for v in self._data
+                    ]
+                )
+            else:
+                data = self._data * reg._get_conversion_factor(src, units)
+            return PintArray(data, dtype=PintDtype(units, reg))
 
     def register_pintrs_pandas() -> None:
         """Register pintrs's PintDtype with pandas.

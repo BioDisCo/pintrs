@@ -20,6 +20,10 @@ pub struct UnitDef {
     pub dimension: Option<String>,
     /// Offset for non-multiplicative units like degC
     pub offset: Option<f64>,
+    /// Logarithmic base for log units like dB (`logbase: 10`)
+    pub logbase: Option<f64>,
+    /// Logarithmic factor for log units like dB (`logfactor: 10`)
+    pub logfactor: Option<f64>,
 }
 
 #[derive(Debug, Clone)]

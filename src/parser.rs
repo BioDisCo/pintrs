@@ -184,43 +184,45 @@ fn parse_alias(line: &str) -> Option<AliasDef> {
 }
 
 fn parse_unit(line: &str) -> Option<UnitDef> {
-    // Split on ; first to handle offset
-    let (main_part, offset_part) = if let Some(pos) = line.find(';') {
+    // Split on the first ';' to separate the relation from attribute segments
+    // ("offset: ...", "logbase: ...; logfactor: ..."), each optionally followed
+    // by "= alias" entries.
+    let (main_part, attr_part) = if let Some(pos) = line.find(';') {
         let (main, rest) = line.split_at(pos);
         (main, Some(&rest[1..]))
     } else {
         (line, None)
     };
 
-    let offset = offset_part.and_then(|s| {
-        // Format: "offset: <value> = ..."
-        let s = s.trim();
-        let s = s.strip_prefix("offset:")?;
-        // Get just the number part, before any = signs
-        let val_str = if let Some(eq_pos) = s.find('=') {
-            s[..eq_pos].trim()
-        } else {
-            s.trim()
-        };
-        eval_simple_expr(val_str)
-    });
+    let mut offset: Option<f64> = None;
+    let mut logbase: Option<f64> = None;
+    let mut logfactor: Option<f64> = None;
+    let mut extra_aliases_from_offset: Vec<String> = Vec::new();
 
-    // Get aliases from after the offset's = signs too
-    let mut extra_aliases_from_offset: Vec<String> = offset_part
-        .map(|s| {
-            let s = s.trim();
-            // Everything after first = sign
-            if let Some(pos) = s.find('=') {
-                s[pos + 1..]
-                    .split('=')
-                    .map(|p| p.trim().to_string())
-                    .filter(|p| !p.is_empty() && p != "_")
-                    .collect()
+    if let Some(rest) = attr_part {
+        for seg in rest.split(';') {
+            let seg = seg.trim();
+            // Aliases appear after '=' within a segment.
+            let key_val = if let Some(eq) = seg.find('=') {
+                for p in seg[eq + 1..].split('=') {
+                    let p = p.trim();
+                    if !p.is_empty() && p != "_" {
+                        extra_aliases_from_offset.push(p.to_string());
+                    }
+                }
+                seg[..eq].trim()
             } else {
-                Vec::new()
+                seg
+            };
+            if let Some(v) = key_val.strip_prefix("offset:") {
+                offset = eval_simple_expr(v.trim());
+            } else if let Some(v) = key_val.strip_prefix("logbase:") {
+                logbase = eval_simple_expr(v.trim());
+            } else if let Some(v) = key_val.strip_prefix("logfactor:") {
+                logfactor = eval_simple_expr(v.trim());
             }
-        })
-        .unwrap_or_default();
+        }
+    }
 
     // Now parse the main part: name = relation [= symbol] [= alias...]
     let eq_parts: Vec<&str> = main_part.split('=').collect();
@@ -240,6 +242,8 @@ fn parse_unit(line: &str) -> Option<UnitDef> {
             is_base: false,
             dimension: None,
             offset,
+            logbase,
+            logfactor,
         });
     }
 
@@ -287,6 +291,8 @@ fn parse_unit(line: &str) -> Option<UnitDef> {
         is_base,
         dimension,
         offset,
+        logbase,
+        logfactor,
     })
 }
 

@@ -208,6 +208,11 @@ degree_Celsius = kelvin; offset: 273.15 = °C = celsius = degC = degreeC
 degree_Rankine = 5 / 9 * kelvin; offset: 0 = °R = rankine = degR = degreeR
 degree_Fahrenheit = 5 / 9 * kelvin; offset: 233.15 + 200 / 9 = °F = fahrenheit = degF = degreeF
 degree_Reaumur = 5 / 4 * kelvin; offset: 273.15 = °Re = reaumur = degRe = degreeRe = degree_Réaumur = réaumur
+# Delta (difference) temperature units, used by offset-unit arithmetic.
+delta_degree_Celsius = kelvin; offset: 0 = delta_degC = delta_°C
+delta_degree_Fahrenheit = 5 / 9 * kelvin; offset: 0 = delta_degF = delta_°F
+delta_degree_Rankine = 5 / 9 * kelvin; offset: 0 = delta_degR
+delta_degree_Reaumur = 5 / 4 * kelvin; offset: 0 = delta_degRe
 atomic_unit_of_temperature = E_h / k = a_u_temp
 planck_temperature = (hbar * c ** 5 / gravitational_constant / k ** 2) ** 0.5
 
@@ -545,6 +550,15 @@ octave = 1 ; logbase: 2; logfactor: 1 = oct
 
 neper = 1 ; logbase: 2.71828182845904523536028747135266249775724709369995; logfactor: 0.5 = Np
 # neper = 1 ; logbase: eulers_number; logfactor: 0.5 = Np
+
+# Delta (difference) forms of logarithmic units, used by their arithmetic.
+delta_decibel = 1 = delta_dB
+delta_decibelwatt = 1 = delta_dBW
+delta_decibelmilliwatt = 1 = delta_dBm
+delta_decibelmicrowatt = 1 = delta_dBu
+delta_decade = 1
+delta_octave = 1 = delta_oct
+delta_neper = 1 = delta_Np
 
 #### UNIT GROUPS ####
 # Mostly for length, area, volume, mass, force

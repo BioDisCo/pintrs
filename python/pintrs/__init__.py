@@ -126,6 +126,10 @@ class Quantity(metaclass=_QuantityMeta):  # type: ignore[misc]
     """
 
     def __new__(cls, *args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
+        # Array-like and complex magnitudes need array dispatch (the registry
+        # handles both); real scalars/strings build the Rust scalar quantity.
+        if args and (_is_array_like(args[0]) or isinstance(args[0], complex)):
+            return get_application_registry().Quantity(*args, **kwargs)
         return _RustQuantity(*args, **kwargs)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -160,14 +164,19 @@ def _make_array_quantity(
     units: str,
     registry: Any = None,
 ) -> Any:
-    """Create an ArrayQuantity, using Rust for f64 1D arrays."""
+    """Create an ArrayQuantity, using Rust for real f64 1D arrays.
+
+    Complex arrays are kept on the pure-Python backend, which preserves the
+    imaginary part (the Rust array stores f64 only).
+    """
     if _RustArrayQuantity is not None:
         try:
             import numpy as np  # noqa: PLC0415
 
-            arr = np.asarray(magnitude, dtype=np.float64)
-            if arr.ndim == 1:
-                return _RustArrayQuantity(arr, units, registry)
+            if not np.iscomplexobj(np.asarray(magnitude)):
+                arr = np.asarray(magnitude, dtype=np.float64)
+                if arr.ndim == 1:
+                    return _RustArrayQuantity(arr, units, registry)
         except (TypeError, ValueError):
             pass
     return _PyArrayQuantity(magnitude, units, registry)
@@ -603,7 +612,7 @@ class Measurement:
     @property
     def error(self) -> Quantity:
         """The uncertainty as a Quantity."""
-        return Quantity(self._error, str(self._value.units))
+        return self._value._registry.Quantity(self._error, str(self._value.units))
 
     @property
     def magnitude(self) -> float:
@@ -662,12 +671,45 @@ class Measurement:
             return Measurement(other - self._value, self._error)  # pyright: ignore[reportOperatorIssue]
         return NotImplemented
 
-    def __mul__(self, other: Measurement | float) -> Measurement:
+    def _convert_error(self, target: str | Unit) -> float:
+        """Convert the uncertainty to ``target`` units as a difference.
+
+        The error is a delta, not an absolute value: for offset units (e.g.
+        ``degC`` -> ``kelvin``) only the multiplicative scale applies, never the
+        offset. Converting ``value`` and ``value + error`` as absolutes and
+        taking the difference yields the correct delta in either linear or
+        offset units, matching pint.
+        """
+        src = str(self._value.units)
+        base = self._value.magnitude
+        make = self._value._registry.Quantity
+        hi = make(base + self._error, src).to(target).magnitude
+        lo = make(base, src).to(target).magnitude
+        return abs(hi - lo)
+
+    def to(self, units: str | Unit) -> Measurement:
+        """Convert the measurement to other (compatible) units."""
+        return Measurement(self._value.to(units), self._convert_error(units))
+
+    def to_base_units(self) -> Measurement:
+        """Convert the measurement to base units."""
+        new_val = self._value.to_base_units()
+        return Measurement(new_val, self._convert_error(str(new_val.units)))
+
+    def to_root_units(self) -> Measurement:
+        """Convert the measurement to root units."""
+        new_val = self._value.to_root_units()
+        return Measurement(new_val, self._convert_error(str(new_val.units)))
+
+    def __mul__(self, other: Measurement | Quantity | float) -> Measurement:
         if isinstance(other, Measurement):
             new_val = self._value * other._value  # pyright: ignore[reportOperatorIssue]
             rel_err = (self.rel**2 + other.rel**2) ** 0.5
             new_err = abs(new_val.magnitude) * rel_err
             return Measurement(new_val, new_err)
+        if isinstance(other, Quantity):
+            new_val = self._value * other  # pyright: ignore[reportOperatorIssue]
+            return Measurement(new_val, abs(new_val.magnitude) * self.rel)
         if isinstance(other, (int, float)):
             return Measurement(self._value * other, self._error * abs(other))  # pyright: ignore[reportOperatorIssue]
         return NotImplemented
@@ -675,12 +717,15 @@ class Measurement:
     def __rmul__(self, other: float) -> Measurement:
         return self.__mul__(other)
 
-    def __truediv__(self, other: Measurement | float) -> Measurement:
+    def __truediv__(self, other: Measurement | Quantity | float) -> Measurement:
         if isinstance(other, Measurement):
             new_val = self._value / other._value  # pyright: ignore[reportOperatorIssue]
             rel_err = (self.rel**2 + other.rel**2) ** 0.5
             new_err = abs(new_val.magnitude) * rel_err
             return Measurement(new_val, new_err)
+        if isinstance(other, Quantity):
+            new_val = self._value / other  # pyright: ignore[reportOperatorIssue]
+            return Measurement(new_val, abs(new_val.magnitude) * self.rel)
         if isinstance(other, (int, float)):
             return Measurement(self._value / other, self._error / abs(other))  # pyright: ignore[reportOperatorIssue]
         return NotImplemented
@@ -703,6 +748,10 @@ _DELTA_UNIT_DEFS = [
     "delta_degree_Fahrenheit = 5 / 9 * kelvin; offset: 0 = delta_degF = delta_°F",
     "delta_degree_Rankine = 5 / 9 * kelvin; offset: 0 = delta_degR",
     "delta_degree_Reaumur = 5 / 4 * kelvin; offset: 0 = delta_degRe",
+    # Delta (difference) forms of logarithmic units, so e.g. `dB - dB` is a
+    # delta rather than mislabelled as an absolute decibel.
+    "delta_decibel = 1 = delta_dB",
+    "delta_neper = 1 = delta_Np",
 ]
 
 _OFFSET_UNITS = frozenset(
@@ -814,34 +863,30 @@ def _parse_dimensionality(dim_string: str) -> _Dimensionality:
     return _Dimensionality(dim_string)
 
 
-_original_q_dimensionality = _RustQuantity.dimensionality  # type: ignore[attr-defined]
+def _make_dimensionality_property(original: Any) -> property:
+    """Wrap a Rust `dimensionality` (a string) as a `_Dimensionality` property.
+
+    The three Rust classes (`Quantity`, `Unit`, `RustArrayQuantity`) share the
+    identical compat shim; this builds it from each one's original descriptor.
+    """
+
+    def _getter(self: Any) -> _Dimensionality:
+        return _parse_dimensionality(original.__get__(self))
+
+    return property(_getter)
 
 
-def _q_dimensionality_compat(self: Any) -> _Dimensionality:
-    dim_str: str = _original_q_dimensionality.__get__(self)  # type: ignore[misc]
-    return _parse_dimensionality(dim_str)
-
-
-_RustQuantity.dimensionality = property(_q_dimensionality_compat)  # type: ignore[attr-defined,assignment]
-
-_original_u_dimensionality = Unit.dimensionality  # type: ignore[attr-defined]
-
-
-def _u_dimensionality_compat(self: Any) -> _Dimensionality:
-    dim_str: str = _original_u_dimensionality.__get__(self)  # type: ignore[misc]
-    return _parse_dimensionality(dim_str)
-
-
-Unit.dimensionality = property(_u_dimensionality_compat)  # type: ignore[attr-defined,assignment]
+_RustQuantity.dimensionality = _make_dimensionality_property(  # type: ignore[attr-defined,assignment]
+    _RustQuantity.dimensionality  # type: ignore[attr-defined]
+)
+Unit.dimensionality = _make_dimensionality_property(  # type: ignore[attr-defined,assignment]
+    Unit.dimensionality  # type: ignore[attr-defined]
+)
 
 if _RustArrayQuantity is not None:
-    _original_raq_dimensionality = _RustArrayQuantity.dimensionality  # type: ignore[attr-defined,union-attr]
-
-    def _raq_dimensionality_compat(self: Any) -> _Dimensionality:
-        dim_str: str = _original_raq_dimensionality.__get__(self)  # type: ignore[misc]
-        return _parse_dimensionality(dim_str)
-
-    _RustArrayQuantity.dimensionality = property(_raq_dimensionality_compat)  # type: ignore[attr-defined,union-attr]
+    _RustArrayQuantity.dimensionality = _make_dimensionality_property(  # type: ignore[attr-defined,union-attr]
+        _RustArrayQuantity.dimensionality  # type: ignore[attr-defined,union-attr]
+    )
     _RustArrayQuantity.__array_priority__ = 21  # type: ignore[attr-defined,union-attr]
 
     def _raq_array_ufunc(
@@ -874,6 +919,86 @@ if _RustArrayQuantity is not None:
         return handler.__array_ufunc__(ufunc, method, *converted, **kwargs)
 
     _RustArrayQuantity.__array_ufunc__ = _raq_array_ufunc  # type: ignore[attr-defined,union-attr]
+
+    def _raq_to_py(obj: Any) -> Any:
+        """Wrap a RustArrayQuantity as the Python ArrayQuantity for shared op logic."""
+        import numpy as _np  # noqa: PLC0415
+
+        if _RustArrayQuantity is not None and isinstance(obj, _RustArrayQuantity):
+            return _PyArrayQuantity(_np.asarray(obj.m), obj._units_str, obj._REGISTRY)
+        return obj
+
+    def _make_raq_binop(method_name: str) -> Any:
+        # Route operators the Rust array type lacks (bare scalar +/-, %, //, **,
+        # divmod, ordered comparisons) and the ones that previously used raw
+        # scaled magnitudes through the Python ArrayQuantity, which converts
+        # dimensionless-scaled values to base units (issue #5 parity).
+        def _binop(self: Any, other: Any) -> Any:
+            return getattr(_raq_to_py(self), method_name)(_raq_to_py(other))
+
+        _binop.__name__ = method_name
+        return _binop
+
+    for _raq_method in (
+        "__add__",
+        "__radd__",
+        "__sub__",
+        "__rsub__",
+        "__mod__",
+        "__rmod__",
+        "__floordiv__",
+        "__rfloordiv__",
+        "__divmod__",
+        "__rdivmod__",
+        "__pow__",
+        "__rpow__",
+        "__matmul__",
+        "__rmatmul__",
+        "__eq__",
+        "__ne__",
+        "__lt__",
+        "__le__",
+        "__gt__",
+        "__ge__",
+    ):
+        setattr(_RustArrayQuantity, _raq_method, _make_raq_binop(_raq_method))
+
+    def _make_raq_binop_fast(orig: Any, method_name: str) -> Any:
+        # mul/div have a fast Rust path for scalar/ndarray/quantity operands; only
+        # bare lists/tuples (which the Rust path rejects) fall back to Python.
+        def _binop(self: Any, other: Any) -> Any:
+            if isinstance(other, (list, tuple)):
+                return getattr(_raq_to_py(self), method_name)(other)
+            result = orig(self, other)
+            if result is NotImplemented:
+                return getattr(_raq_to_py(self), method_name)(_raq_to_py(other))
+            return result
+
+        _binop.__name__ = method_name
+        return _binop
+
+    for _raq_fast in ("__mul__", "__rmul__", "__truediv__", "__rtruediv__"):
+        _raq_orig = getattr(_RustArrayQuantity, _raq_fast, None)
+        if _raq_orig is not None:
+            setattr(
+                _RustArrayQuantity,
+                _raq_fast,
+                _make_raq_binop_fast(_raq_orig, _raq_fast),
+            )
+
+    def _make_raq_method(method_name: str) -> Any:
+        # Delegate (non-mutating) array methods the Rust array type lacks to the
+        # Python ArrayQuantity, coercing array-quantity arguments to keep units.
+        def _method(self: Any, *args: Any, **kwargs: Any) -> Any:
+            coerced = tuple(_raq_to_py(a) for a in args)
+            return getattr(_raq_to_py(self), method_name)(*coerced, **kwargs)
+
+        _method.__name__ = method_name
+        return _method
+
+    for _raq_named in ("clip", "dot", "searchsorted", "conjugate", "conj"):
+        if not hasattr(_RustArrayQuantity, _raq_named):
+            setattr(_RustArrayQuantity, _raq_named, _make_raq_method(_raq_named))
 
     try:
         from pintrs.numpy_support import (
@@ -950,6 +1075,7 @@ def _unit_array_mul(self: Any, other: Any) -> Any:
     """Unit * array -> ArrayQuantity."""
     arr = _to_arr(other) if _np_cached is not None else None
     if arr is not None:
+        _ensure_multiplicative(self._registry, str(self))
         return _make_array_quantity(arr, str(self), self._registry)
     return _original_unit_mul(self, other)
 
@@ -958,6 +1084,7 @@ def _unit_array_rmul(self: Any, other: Any) -> Any:
     """array * Unit -> ArrayQuantity."""
     arr = _to_arr(other) if _np_cached is not None else None
     if arr is not None:
+        _guard_reflected_operand(self._registry, str(self), other)
         return _make_array_quantity(arr, str(self), self._registry)
     return _original_unit_rmul(self, other)
 
@@ -1324,8 +1451,14 @@ def _get_context_registry() -> tuple[UnitRegistry, ActiveContexts] | None:
     return getattr(_context_state, "current", None)
 
 
-def _quantity_to_with_context(self: Any, units: Any, *_contexts: Any) -> Any:
-    """Quantity.to() that falls back to active context transformations."""
+def _quantity_to_with_context(self: Any, units: Any, *contexts: Any) -> Any:
+    """Quantity.to() that supports contexts passed as positional args, and falls
+    back to any contexts active from a ``with ureg.context(...)`` block."""
+    if contexts:
+        # `.to(target, "spectroscopy", ...)` — enable those contexts and retry.
+        ureg = getattr(self, "_registry", None) or get_application_registry()
+        with _ureg_context(ureg, *contexts):
+            return _quantity_to_with_context(self, units)
     try:
         return _original_quantity_to(self, units)
     except DimensionalityError:
@@ -1499,6 +1632,14 @@ def _ureg_quantity(self: UnitRegistry, value: Any, units: Any = None) -> Any:  #
     if vtype is str:
         return self._scalar_quantity(value, None)
 
+    # Complex scalar: the Rust scalar Quantity stores f64 only, so keep complex
+    # magnitudes on the complex-capable (0-d) Python array backend.
+    if isinstance(value, complex):
+        import numpy as np  # noqa: PLC0415
+
+        units_str = str(units) if units is not None else "dimensionless"
+        return _make_array_quantity(np.asarray(value), units_str, self)
+
     from pintrs.numpy_support import ArrayQuantity as _PyAQ  # noqa: PLC0415
 
     # Quantity(ArrayQuantity/RustArrayQuantity, new_units) -> convert
@@ -1669,16 +1810,40 @@ _RustQuantity.__array_priority__ = 21  # type: ignore[attr-defined]  # higher th
 
 
 def _q_clip(self: Any, min: Any = None, max: Any = None) -> Any:  # noqa: A002
-    """Clip magnitude values."""
+    """Clip magnitude values.
+
+    A bare numeric bound on a dimensionless quantity is treated as a
+    dimensionless value, so the quantity is compared in base units (issue #5).
+    """
+    units_str = str(self.units)
+    factor = 1.0
+    if (
+        (min is not None or max is not None)
+        and self.dimensionless
+        and units_str not in ("", "dimensionless")
+    ):
+        factor = self._registry._get_conversion_factor(units_str, "dimensionless")
+    if factor != 1.0:
+        # Operate on the base value, then express the result back in self's units.
+        base = self.magnitude * factor
+        if hasattr(base, "clip"):
+            clipped = base.clip(min, max)
+        else:
+            clipped = base
+            if min is not None and clipped < min:
+                clipped = min
+            if max is not None and clipped > max:
+                clipped = max
+        return self.__class__(clipped / factor, units_str)
     m = self.magnitude
     if hasattr(m, "clip"):
-        return self.__class__(m.clip(min, max), str(self.units))
+        return self.__class__(m.clip(min, max), units_str)
     clipped = m
     if min is not None and clipped < min:
         clipped = min
     if max is not None and clipped > max:
         clipped = max
-    return self.__class__(clipped, str(self.units))
+    return self.__class__(clipped, units_str)
 
 
 def _q_dot(self: Any, other: Any) -> Any:
@@ -1972,28 +2137,30 @@ def _is_array_quantity(obj: Any) -> bool:
     )
 
 
-def _q_array_mul(self: Any, other: Any) -> Any:
-    if type(other) in _SCALAR_TYPES:
-        return _original_q_mul(self, other)
-    if _is_array_quantity(other):
-        return other.__rmul__(self)
-    arr = _to_arr(other)
-    if arr is not None:
-        mag = arr * self.magnitude
-        return _make_array_quantity(mag, str(self.units), self._registry)
-    return _original_q_mul(self, other)
+def _ensure_multiplicative(registry: Any, units_str: str) -> None:
+    """Raise OffsetUnitCalculusError if ``units_str`` is non-multiplicative.
+
+    A non-multiplicative (offset/log) unit cannot take part in `*`, `/` or a
+    power other than 0/1. This is the single module-level check the array/Unit
+    fast paths share (mirroring the Rust ``ensure_multiplicative`` and the
+    ``ArrayQuantity._ensure_multiplicative`` method), since those paths build a
+    result directly instead of going through a guarded operator.
+    """
+    if registry._is_non_multiplicative(units_str):
+        msg = "Ambiguous operation with offset unit."
+        raise OffsetUnitCalculusError(msg)
 
 
-def _q_array_rmul(self: Any, other: Any) -> Any:
-    if type(other) in _SCALAR_TYPES:
-        return _original_q_rmul(self, other)
-    if _is_array_quantity(other):
-        return other.__mul__(self)
-    arr = _to_arr(other)
-    if arr is not None:
-        mag = arr * self.magnitude
-        return _make_array_quantity(mag, str(self.units), self._registry)
-    return _original_q_rmul(self, other)
+def _guard_reflected_operand(registry: Any, units_str: str, other: Any) -> None:
+    """Apply the non-multiplicative guard to a *reflected* operand.
+
+    pint is asymmetric: a bare ndarray on the left uses the numpy ufunc
+    protocol and is left elementwise (allowed), but a list/tuple on the left
+    goes through ordinary operator dispatch, so the offset rule applies and the
+    operation raises. Centralised so every reflected operator shares one rule.
+    """
+    if isinstance(other, (list, tuple)):
+        _ensure_multiplicative(registry, units_str)
 
 
 def _is_nan(v: Any) -> bool:
@@ -2003,96 +2170,154 @@ def _is_nan(v: Any) -> bool:
         return False
 
 
-def _q_array_add(self: Any, other: Any) -> Any:
-    if type(other) in _SCALAR_TYPES:
+def _q_host_array(self: Any) -> Any:
+    """Wrap a scalar Quantity's magnitude as a host ArrayQuantity.
+
+    Used for `Quantity (+|-) ndarray`, so additive ops with a bare array reuse
+    the ArrayQuantity logic that converts a dimensionless-scaled quantity to base
+    units before combining (issue #5).
+    """
+    assert _np_cached is not None
+    return _PyArrayQuantity(
+        _np_cached.asarray(self.magnitude), str(self.units), self._registry
+    )
+
+
+def _make_q_array_router(
+    original: Any,
+    reflected: str,
+    array_body: Any,
+    *,
+    scalar_body: Any = None,
+) -> Any:
+    """Build a scalar-Quantity operator that broadcasts over ndarray/list operands.
+
+    The dispatch is uniform across `*`/`/`/`+`/`-`: a Python scalar uses
+    `scalar_body` (default `original`); an array quantity delegates to its
+    `reflected` method (preserving its units); a bare ndarray/list is handled by
+    `array_body(self, arr, other)`; anything else falls back to `original`.
+    """
+
+    def _op(self: Any, other: Any) -> Any:
+        if type(other) in _SCALAR_TYPES:
+            return (scalar_body or original)(self, other)
+        if _is_array_quantity(other):
+            return getattr(other, reflected)(self)
+        arr = _to_arr(other)
+        if arr is not None:
+            return array_body(self, arr, other)
+        return original(self, other)
+
+    return _op
+
+
+def _q_nan_aware_scalar(original: Any) -> Any:
+    """Scalar branch for `+`/`-`: a bare NaN keeps the quantity's units."""
+
+    def _scalar(self: Any, other: Any) -> Any:
         if _is_nan(other):
             return _RustQuantity(float("nan"), str(self.units))
-        return _original_q_add(self, other)
-    if _is_array_quantity(other):
-        return other.__radd__(self)
-    arr = _to_arr(other)
-    if arr is not None:
-        mag = arr + self.magnitude
-        return _make_array_quantity(mag, str(self.units), self._registry)
-    return _original_q_add(self, other)
+        return original(self, other)
+
+    return _scalar
 
 
-def _q_array_radd(self: Any, other: Any) -> Any:
-    if type(other) in _SCALAR_TYPES:
-        if _is_nan(other):
-            return _RustQuantity(float("nan"), str(self.units))
-        return _original_q_radd(self, other)
-    if _is_array_quantity(other):
-        return other.__add__(self)
-    arr = _to_arr(other)
-    if arr is not None:
-        mag = arr + self.magnitude
-        return _make_array_quantity(mag, str(self.units), self._registry)
-    return _original_q_radd(self, other)
+def _q_arr_mul_body(self: Any, arr: Any, other: Any) -> Any:  # noqa: ARG001
+    _ensure_multiplicative(self._registry, str(self.units))
+    return _make_array_quantity(arr * self.magnitude, str(self.units), self._registry)
 
 
-def _q_array_sub(self: Any, other: Any) -> Any:
-    if type(other) in _SCALAR_TYPES:
-        return _original_q_sub(self, other)
-    if _is_array_quantity(other):
-        return other.__rsub__(self)
-    arr = _to_arr(other)
-    if arr is not None:
-        return _make_array_quantity(
-            self.magnitude - arr,
-            str(self.units),
-            self._registry,
-        )
-    return _original_q_sub(self, other)
+def _q_arr_rmul_body(self: Any, arr: Any, other: Any) -> Any:
+    _guard_reflected_operand(self._registry, str(self.units), other)
+    return _make_array_quantity(arr * self.magnitude, str(self.units), self._registry)
 
 
-def _q_array_rsub(self: Any, other: Any) -> Any:
-    if type(other) in _SCALAR_TYPES:
-        return _original_q_rsub(self, other)
-    if _is_array_quantity(other):
-        return other.__sub__(self)
-    arr = _to_arr(other)
-    if arr is not None:
-        return _make_array_quantity(
-            arr - self.magnitude,
-            str(self.units),
-            self._registry,
-        )
-    return _original_q_rsub(self, other)
+def _q_arr_truediv_body(self: Any, arr: Any, other: Any) -> Any:  # noqa: ARG001
+    _ensure_multiplicative(self._registry, str(self.units))
+    return _make_array_quantity(self.magnitude / arr, str(self.units), self._registry)
 
 
-def _q_array_truediv(self: Any, other: Any) -> Any:
-    if type(other) in _SCALAR_TYPES:
-        return _original_q_truediv(self, other)
-    if _is_array_quantity(other):
-        return other.__rtruediv__(self)
-    arr = _to_arr(other)
-    if arr is not None:
-        return _make_array_quantity(
-            self.magnitude / arr,
-            str(self.units),
-            self._registry,
-        )
-    return _original_q_truediv(self, other)
+def _q_arr_rtruediv_body(self: Any, arr: Any, other: Any) -> Any:
+    _guard_reflected_operand(self._registry, str(self.units), other)
+    inv_units = str(self._registry.Unit("dimensionless") / self.units)
+    return _make_array_quantity(arr / self.magnitude, inv_units, self._registry)
 
 
-def _q_array_rtruediv(self: Any, other: Any) -> Any:
-    if type(other) in _SCALAR_TYPES:
-        return _original_q_rtruediv(self, other)
-    if _is_array_quantity(other):
-        return other.__truediv__(self)
-    arr = _to_arr(other)
-    if arr is not None:
-        inv_units = str(self._registry.Unit("dimensionless") / self.units)
-        return _make_array_quantity(arr / self.magnitude, inv_units, self._registry)
-    return _original_q_rtruediv(self, other)
+def _q_arr_host(method: str) -> Any:
+    """Additive array body: combine through the host ArrayQuantity (issue #5)."""
+
+    def _body(self: Any, arr: Any, other: Any) -> Any:  # noqa: ARG001
+        return getattr(_q_host_array(self), method)(arr)
+
+    return _body
 
 
-_RustQuantity.__mul__ = _q_array_mul  # type: ignore[attr-defined,assignment]
-_RustQuantity.__rmul__ = _q_array_rmul  # type: ignore[attr-defined,assignment]
-_RustQuantity.__add__ = _q_array_add  # type: ignore[attr-defined,assignment]
-_RustQuantity.__radd__ = _q_array_radd  # type: ignore[attr-defined,assignment]
-_RustQuantity.__sub__ = _q_array_sub  # type: ignore[attr-defined,assignment]
-_RustQuantity.__rsub__ = _q_array_rsub  # type: ignore[attr-defined,assignment]
-_RustQuantity.__truediv__ = _q_array_truediv  # type: ignore[attr-defined,assignment]
-_RustQuantity.__rtruediv__ = _q_array_rtruediv  # type: ignore[attr-defined,assignment]
+_RustQuantity.__mul__ = _make_q_array_router(
+    _original_q_mul, "__rmul__", _q_arr_mul_body
+)  # type: ignore[attr-defined,assignment]
+_RustQuantity.__rmul__ = _make_q_array_router(
+    _original_q_rmul, "__mul__", _q_arr_rmul_body
+)  # type: ignore[attr-defined,assignment]
+_RustQuantity.__add__ = _make_q_array_router(  # type: ignore[attr-defined,assignment]
+    _original_q_add,
+    "__radd__",
+    _q_arr_host("__add__"),
+    scalar_body=_q_nan_aware_scalar(_original_q_add),
+)
+_RustQuantity.__radd__ = _make_q_array_router(  # type: ignore[attr-defined,assignment]
+    _original_q_radd,
+    "__add__",
+    _q_arr_host("__radd__"),
+    scalar_body=_q_nan_aware_scalar(_original_q_radd),
+)
+_RustQuantity.__sub__ = _make_q_array_router(
+    _original_q_sub, "__rsub__", _q_arr_host("__sub__")
+)  # type: ignore[attr-defined,assignment]
+_RustQuantity.__rsub__ = _make_q_array_router(
+    _original_q_rsub, "__sub__", _q_arr_host("__rsub__")
+)  # type: ignore[attr-defined,assignment]
+_RustQuantity.__truediv__ = _make_q_array_router(  # type: ignore[attr-defined,assignment]
+    _original_q_truediv, "__rtruediv__", _q_arr_truediv_body
+)
+_RustQuantity.__rtruediv__ = _make_q_array_router(  # type: ignore[attr-defined,assignment]
+    _original_q_rtruediv, "__truediv__", _q_arr_rtruediv_body
+)
+
+
+def _make_q_array_op(orig: Any, method: str) -> Any:
+    """Route a scalar Quantity op against an ndarray/list through the host array
+    quantity so it broadcasts elementwise like pint; scalars/quantities use the
+    original Rust operator."""
+
+    def _op(self: Any, other: Any) -> Any:
+        # Array quantities first (preserve their units); then bare ndarrays/lists.
+        if _is_array_quantity(other):
+            return getattr(_q_host_array(self), method)(other)
+        arr = _to_arr(other)
+        if arr is not None:
+            return getattr(_q_host_array(self), method)(arr)
+        return orig(self, other)
+
+    _op.__name__ = method
+    return _op
+
+
+for _q_arr_method in (
+    "__eq__",
+    "__ne__",
+    "__lt__",
+    "__le__",
+    "__gt__",
+    "__ge__",
+    "__floordiv__",
+    "__rfloordiv__",
+    "__mod__",
+    "__rmod__",
+    "__divmod__",
+    "__rdivmod__",
+):
+    setattr(
+        _RustQuantity,
+        _q_arr_method,
+        _make_q_array_op(getattr(_RustQuantity, _q_arr_method), _q_arr_method),
+    )

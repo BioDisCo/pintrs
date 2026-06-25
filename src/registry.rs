@@ -19,6 +19,10 @@ pub struct UnitEntry {
     pub dimensionality: UnitsContainer,
     /// Offset for non-multiplicative units (e.g. degC offset: 273.15)
     pub offset: f64,
+    /// Logarithmic base/factor for log units (e.g. dB: logbase 10, logfactor 10).
+    /// `None` for ordinary (linear) units.
+    pub logbase: Option<f64>,
+    pub logfactor: Option<f64>,
     pub symbol: Option<String>,
     pub aliases: Vec<String>,
 }
@@ -190,6 +194,8 @@ impl UnitRegistry {
                 root_units: UnitsContainer::from_single(def.name.clone(), 1.0),
                 dimensionality: UnitsContainer::from_single(dim_name.clone(), 1.0),
                 offset: def.offset.unwrap_or(0.0),
+                logbase: def.logbase,
+                logfactor: def.logfactor,
                 symbol: def.symbol.clone(),
                 aliases: def.aliases.clone(),
             };
@@ -208,6 +214,8 @@ impl UnitRegistry {
                 root_units: UnitsContainer::from_single(def.name.clone(), 1.0),
                 dimensionality: UnitsContainer::new(),
                 offset: def.offset.unwrap_or(0.0),
+                logbase: def.logbase,
+                logfactor: def.logfactor,
                 symbol: def.symbol.clone(),
                 aliases: def.aliases.clone(),
             };
@@ -224,6 +232,8 @@ impl UnitRegistry {
             root_units,
             dimensionality,
             offset: def.offset.unwrap_or(0.0),
+            logbase: def.logbase,
+            logfactor: def.logfactor,
             symbol: def.symbol.clone(),
             aliases: def.aliases.clone(),
         };
@@ -778,6 +788,161 @@ impl UnitRegistry {
         self.get_unit_offset(name) != 0.0
     }
 
+    /// Get the logarithmic (base, factor) for a unit, if it is a log unit.
+    #[inline]
+    pub fn get_unit_log(&self, name: &str) -> Option<(f64, f64)> {
+        let canonical = self.name_map.get(name)?;
+        let entry = self.units.get(canonical)?;
+        match (entry.logbase, entry.logfactor) {
+            (Some(lb), Some(lf)) => Some((lb, lf)),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn is_log_unit(&self, name: &str) -> bool {
+        self.get_unit_log(name).is_some()
+    }
+
+    #[inline]
+    pub fn has_log_units(&self, units: &UnitsContainer) -> bool {
+        units.iter().any(|(name, _)| self.is_log_unit(name))
+    }
+
+    /// A unit is non-multiplicative if it has an offset (degC) or is logarithmic
+    /// (dB). Addition/subtraction of such units follows special rules.
+    #[inline]
+    pub fn is_non_multiplicative(&self, units: &UnitsContainer) -> bool {
+        self.has_offset_units(units) || self.has_log_units(units)
+    }
+
+    /// Whether a single-unit container is a registered `delta_*` (difference)
+    /// unit, which may be added to/subtracted from an absolute offset unit.
+    fn is_delta_unit(&self, units: &UnitsContainer) -> bool {
+        if units.len() != 1 {
+            return false;
+        }
+        match units.iter().next() {
+            Some((name, &exp)) if (exp - 1.0).abs() <= f64::EPSILON => self
+                .name_map
+                .get(name)
+                .is_some_and(|c| c.starts_with("delta_")),
+            _ => false,
+        }
+    }
+
+    /// The `delta_<name>` unit container for a single offset/log unit, if such a
+    /// delta unit is registered (e.g. degC -> delta_degree_Celsius).
+    fn delta_units_of(&self, units: &UnitsContainer) -> Option<UnitsContainer> {
+        if units.len() != 1 {
+            return None;
+        }
+        let (name, &exp) = units.iter().next()?;
+        if (exp - 1.0).abs() > f64::EPSILON {
+            return None;
+        }
+        let canonical = self.name_map.get(name)?;
+        let delta_name = format!("delta_{canonical}");
+        if self.name_map.contains_key(&delta_name) {
+            Some(UnitsContainer::from_single(delta_name, 1.0))
+        } else {
+            None
+        }
+    }
+
+    /// Add or subtract two quantities where at least one has non-multiplicative
+    /// (offset/log) units, following pint's rules:
+    /// - absolute +/- absolute addition is ambiguous -> error
+    /// - absolute - absolute -> a delta (difference)
+    /// - absolute +/- a multiplicative (step/delta) operand -> stays absolute
+    pub fn offset_log_add_sub(
+        &mut self,
+        su: &UnitsContainer,
+        sm: f64,
+        ou: &UnitsContainer,
+        om: f64,
+        subtract: bool,
+    ) -> PintResult<(f64, UnitsContainer)> {
+        let sd = self.get_dimensionality(su)?;
+        let od = self.get_dimensionality(ou)?;
+        if sd != od {
+            return Err(Box::new(PintError::DimensionalityError {
+                src_units: su.to_string(),
+                dst_units: ou.to_string(),
+                src_dim: Some(sd),
+                dst_dim: Some(od),
+            }));
+        }
+        let self_nm = self.is_non_multiplicative(su);
+        let self_delta = self.is_delta_unit(su);
+        let other_delta = self.is_delta_unit(ou);
+        let (sf, sroot) = self.get_root_units(su)?;
+        let (of, oroot) = self.get_root_units(ou)?;
+
+        let offset_err = || {
+            Box::new(PintError::OffsetUnitCalculusError {
+                src_units: su.to_string(),
+                dst_units: ou.to_string(),
+            })
+        };
+
+        if !subtract {
+            // Only a delta may be added to an absolute offset/log unit; adding
+            // anything else (another absolute, or a plain unit like kelvin) is
+            // ambiguous, like pint.
+            if self_nm {
+                if other_delta {
+                    return Ok((sm + om * (of / sf), su.clone()));
+                }
+                return Err(offset_err());
+            }
+            // other_nm: self must be the delta to keep the absolute result.
+            if self_delta {
+                return Ok((om + sm * (sf / of), ou.clone()));
+            }
+            return Err(offset_err());
+        }
+
+        // Subtraction. abs - delta -> abs (step); abs - abs -> delta (difference).
+        if self_nm {
+            if other_delta {
+                return Ok((sm - om * (of / sf), su.clone()));
+            }
+            let diff = if su == ou {
+                sm - om
+            } else {
+                let self_base = self.convert(sm, su, &sroot)?;
+                let other_base = self.convert(om, ou, &sroot)?;
+                (self_base - other_base) / sf
+            };
+            let units = self.delta_units_of(su).unwrap_or_else(|| su.clone());
+            return Ok((diff, units));
+        }
+        // other_nm, self is not (other is the absolute).
+        if self_delta {
+            // delta - absolute -> absolute: apply the delta step to -absolute.
+            return Ok((sm * (sf / of) - om, ou.clone()));
+        }
+        // plain - absolute (e.g. kelvin - degC) -> delta of the absolute.
+        let self_base = self.convert(sm, su, &oroot)?;
+        let other_base = self.convert(om, ou, &oroot)?;
+        let diff = (self_base - other_base) / of;
+        let units = self.delta_units_of(ou).unwrap_or_else(|| ou.clone());
+        Ok((diff, units))
+    }
+
+    /// Log (base, factor) for a single-unit (exponent 1) container, else None.
+    fn single_log_params(&self, units: &UnitsContainer) -> Option<(f64, f64)> {
+        if units.len() != 1 {
+            return None;
+        }
+        let (name, &exp) = units.iter().next()?;
+        if (exp - 1.0).abs() > f64::EPSILON {
+            return None;
+        }
+        self.get_unit_log(name)
+    }
+
     /// Convert a value from src units to dst units
     pub fn convert(
         &mut self,
@@ -785,6 +950,11 @@ impl UnitRegistry {
         src: &UnitsContainer,
         dst: &UnitsContainer,
     ) -> PintResult<f64> {
+        // Logarithmic units (dB, Np, ...) convert via their log/exp transform.
+        if self.has_log_units(src) || self.has_log_units(dst) {
+            return self.convert_with_log(value, src, dst);
+        }
+
         // Handle offset units
         let src_has_offset = self.has_offset_units(src);
         let dst_has_offset = self.has_offset_units(dst);
@@ -797,8 +967,43 @@ impl UnitRegistry {
         Ok(value * factor)
     }
 
+    /// Convert involving logarithmic units, e.g. `dB <-> dimensionless`,
+    /// `dBm <-> watt`. A log unit maps to/from its linear reference value via
+    /// `x_lin = scale * logbase^(x_log / logfactor)` (and the inverse).
+    fn convert_with_log(
+        &mut self,
+        value: f64,
+        src: &UnitsContainer,
+        dst: &UnitsContainer,
+    ) -> PintResult<f64> {
+        let src_dim = self.get_dimensionality(src)?;
+        let dst_dim = self.get_dimensionality(dst)?;
+        if src_dim != dst_dim {
+            return Err(Box::new(PintError::DimensionalityError {
+                src_units: src.to_string(),
+                dst_units: dst.to_string(),
+                src_dim: Some(src_dim),
+                dst_dim: Some(dst_dim),
+            }));
+        }
+        let src_log = self.single_log_params(src);
+        let dst_log = self.single_log_params(dst);
+        let (src_factor, _) = self.get_root_units(src)?;
+        let (dst_factor, _) = self.get_root_units(dst)?;
+        // Linear value in the shared reference (root) units.
+        let lin = match src_log {
+            Some((lb, lf)) => src_factor * lb.powf(value / lf),
+            None => value * src_factor,
+        };
+        let result = match dst_log {
+            Some((lb, lf)) => lf * (lin / dst_factor).ln() / lb.ln(),
+            None => lin / dst_factor,
+        };
+        Ok(result)
+    }
+
     #[inline]
-    fn has_offset_units(&self, units: &UnitsContainer) -> bool {
+    pub fn has_offset_units(&self, units: &UnitsContainer) -> bool {
         for (name, _) in units.iter() {
             if self.is_offset_unit(name) {
                 return true;

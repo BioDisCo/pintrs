@@ -140,3 +140,61 @@ class TestMeasurementComparison:
         expected_rel = math.sqrt(rel1**2 + rel2**2)
         expected_abs = expected_rel * 200
         assert result.error.magnitude == pytest.approx(expected_abs)
+
+
+class TestMeasurementQuantityArithmetic:
+    """Measurement combined with Quantity, and unit conversion (pint parity)."""
+
+    def test_mul_quantity(self, ureg: UnitRegistry) -> None:
+        m = ureg.Measurement(10, 1, "meter") * ureg.Quantity(2.0, "second")
+        assert m.value.magnitude == pytest.approx(20.0)
+        assert m.error.magnitude == pytest.approx(2.0)
+        units_str = str(m.units)
+        assert "meter" in units_str
+        assert "second" in units_str
+
+    def test_truediv_quantity(self, ureg: UnitRegistry) -> None:
+        m = ureg.Measurement(10, 1, "meter") / ureg.Quantity(2.0, "second")
+        assert m.value.magnitude == pytest.approx(5.0)
+        assert m.error.magnitude == pytest.approx(0.5)
+
+    def test_to(self, ureg: UnitRegistry) -> None:
+        m = ureg.Measurement(10, 1, "meter").to("centimeter")
+        assert m.value.magnitude == pytest.approx(1000.0)
+        assert m.error.magnitude == pytest.approx(100.0)
+        assert str(m.units) == "centimeter"
+
+    def test_to_base_units(self, ureg: UnitRegistry) -> None:
+        m = ureg.Measurement(10, 1, "kilometer").to_base_units()
+        assert m.value.magnitude == pytest.approx(10000.0)
+        assert m.error.magnitude == pytest.approx(1000.0)
+        assert str(m.units) == "meter"
+
+    def test_to_base_units_offset(self, ureg: UnitRegistry) -> None:
+        # degC -> kelvin: the value shifts by the offset, but the uncertainty is
+        # a delta and only the (unit) multiplicative scale applies (factor 1).
+        m = ureg.Measurement(10, 1, "degC").to_base_units()
+        assert m.value.magnitude == pytest.approx(283.15)
+        assert m.error.magnitude == pytest.approx(1.0)
+        assert str(m.units) == "kelvin"
+
+    def test_to_offset_scales_error_as_delta(self, ureg: UnitRegistry) -> None:
+        # degC -> degF: value via offset (10 -> 50), uncertainty as a delta (x1.8).
+        m = ureg.Measurement(10, 1, "degC").to("degF")
+        assert m.value.magnitude == pytest.approx(50.0)
+        assert m.error.magnitude == pytest.approx(1.8)
+
+    def test_to_root_units(self, ureg: UnitRegistry) -> None:
+        m = ureg.Measurement(10, 1, "kilometer").to_root_units()
+        assert m.value.magnitude == pytest.approx(10000.0)
+        assert m.error.magnitude == pytest.approx(1000.0)
+
+    def test_custom_registry_units(self, ureg: UnitRegistry) -> None:
+        # Measurement helper quantities must use the value's own registry, not
+        # the global application registry, so custom units resolve.
+        ureg.define("myfoo = 2 * meter")
+        ureg.define("mybar = 4 * meter")
+        m = ureg.Measurement(10, 1, "myfoo").to("mybar")
+        assert m.value.magnitude == pytest.approx(5.0)
+        assert m.error.magnitude == pytest.approx(0.5)
+        assert str(m.units) == "mybar"
